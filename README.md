@@ -15,6 +15,25 @@ A Desmos-like mathematical graphing calculator built with Rust, featuring GPU-ac
 |----------|----------|
 | macOS (Apple Silicon) | [math-grapher-macos-arm64](https://github.com/riverwu/math-grapher/releases/download/v0.1.0/math-grapher-macos-arm64) |
 
+### macOS: First Run Instructions
+
+Since the binary is not signed with an Apple Developer certificate, macOS Gatekeeper will block it. To run:
+
+**Method 1: Remove quarantine attribute (Recommended)**
+```bash
+# Download and make executable
+chmod +x math-grapher-macos-arm64
+# Remove quarantine attribute
+xattr -cr math-grapher-macos-arm64
+# Run
+./math-grapher-macos-arm64
+```
+
+**Method 2: System Preferences**
+1. Try to open the app (it will be blocked)
+2. Go to **System Preferences > Privacy & Security**
+3. Find the blocked app message and click **"Open Anyway"**
+
 ## Features
 
 ### Expression Types
@@ -175,6 +194,25 @@ MIT License
 | 平台 | 下载 |
 |------|------|
 | macOS (Apple Silicon) | [math-grapher-macos-arm64](https://github.com/riverwu/math-grapher/releases/download/v0.1.0/math-grapher-macos-arm64) |
+
+### macOS 首次运行说明
+
+由于二进制文件未经 Apple 开发者签名，macOS 会阻止运行。解决方法：
+
+**方法 1：移除隔离属性（推荐）**
+```bash
+# 添加执行权限
+chmod +x math-grapher-macos-arm64
+# 移除隔离属性
+xattr -cr math-grapher-macos-arm64
+# 运行
+./math-grapher-macos-arm64
+```
+
+**方法 2：系统偏好设置**
+1. 尝试打开应用（会被阻止）
+2. 打开 **系统偏好设置 > 隐私与安全性**
+3. 找到被阻止的应用提示，点击 **"仍要打开"**
 
 ## 功能特性
 
