@@ -6,12 +6,14 @@ mod app;
 mod expr_panel;
 mod graph_view;
 mod history;
+mod math_display;
 mod slider;
 mod syntax;
 mod toolbar;
 mod settings;
 
 pub use app::MathGrapherApp;
+pub use math_display::MathFormatter;
 pub use expr_panel::{ExpressionPanel, ExpressionEntry};
 pub use graph_view::GraphView;
 pub use history::{History, Action};

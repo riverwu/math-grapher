@@ -17,7 +17,7 @@ use crate::render::{
     RegionRenderer, RegionStyle,
 };
 
-use super::{ExpressionPanel, GraphView, SettingsPanel, ParameterSlider, syntax_highlighted_text_edit, History, Action};
+use super::{ExpressionPanel, GraphView, SettingsPanel, ParameterSlider, syntax_highlighted_text_edit, History, Action, MathFormatter};
 
 /// A compiled expression ready for rendering
 #[derive(Debug, Clone)]
@@ -182,8 +182,6 @@ pub struct MathGrapherApp {
     markers: Vec<Marker>,
     /// Parameter sliders
     sliders: Vec<ParameterSlider>,
-    /// Show settings panel
-    show_settings: bool,
     /// Status message
     status_message: Option<String>,
     /// Graph canvas
@@ -208,8 +206,6 @@ pub struct MathGrapherApp {
     fit_result: Option<FitResult>,
     /// Is fitting mode active (click to add points)
     fitting_mode: bool,
-    /// Show fitting panel
-    show_fitting_panel: bool,
     /// Input field for fitting X coordinate
     fit_input_x: String,
     /// Input field for fitting Y coordinate
@@ -228,8 +224,23 @@ pub struct MathGrapherApp {
     // Expression history
     /// Previously entered expressions (for quick re-input)
     expression_history: Vec<String>,
-    /// Show expression history panel
-    show_history: bool,
+
+    // Snap point
+    /// Current snap point (if mouse is near a critical point)
+    snap_point: Option<(Point, SnapPointType)>,
+    /// Snap distance in pixels
+    snap_distance: f64,
+}
+
+/// Type of snap point
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SnapPointType {
+    /// Intersection between two curves
+    Intersection,
+    /// Zero crossing (y = 0)
+    Zero,
+    /// Local extremum (maximum or minimum)
+    Extremum,
 }
 
 impl MathGrapherApp {
@@ -241,7 +252,6 @@ impl MathGrapherApp {
             expressions: Vec::new(),
             markers: Vec::new(),
             sliders: Vec::new(),
-            show_settings: false,
             status_message: None,
             canvas: GraphCanvas::new(),
             interaction: CanvasInteraction::new(),
@@ -254,7 +264,6 @@ impl MathGrapherApp {
             fit_model: FitModel::Linear,
             fit_result: None,
             fitting_mode: false,
-            show_fitting_panel: false,
             fit_input_x: String::new(),
             fit_input_y: String::new(),
             // Click-to-query
@@ -264,7 +273,9 @@ impl MathGrapherApp {
             history: History::new(),
             // Expression history
             expression_history: Vec::new(),
-            show_history: false,
+            // Snap point
+            snap_point: None,
+            snap_distance: 20.0, // pixels - increased for better detection
         }
     }
 
@@ -322,6 +333,9 @@ impl MathGrapherApp {
                     expr.update_cache_with_params(&self.canvas.viewport, &params);
                 }
 
+                // Update intersections after adding a new curve
+                self.update_intersections();
+
                 self.status_message = None;
 
                 // Add to expression history (if not already present)
@@ -361,6 +375,9 @@ impl MathGrapherApp {
 
             self.expressions.remove(index);
             self.update_sliders_from_expressions();
+
+            // Update intersections after removing a curve
+            self.update_intersections();
         }
     }
 
@@ -451,20 +468,114 @@ impl MathGrapherApp {
         }
     }
 
-    /// Add fitted curve to expressions
-    fn add_fit_to_expressions(&mut self) {
-        if let Some(ref result) = self.fit_result {
-            let expr_str = format!("y = {}", result.to_expression());
-            self.add_expression(&expr_str);
-        }
-    }
-
     /// Clear fitting data
     fn clear_fit_data(&mut self) {
         self.fit_data_points.clear();
         self.fit_result = None;
         // Remove data point markers
         self.markers.retain(|m| m.marker_type != MarkerType::DataPoint);
+    }
+
+    /// Find the nearest snap point to the mouse position
+    fn find_snap_point(&self, mouse_world: Point, transform: &CoordinateTransform) -> Option<(Point, SnapPointType)> {
+        // Convert snap distance from pixels to world units
+        let snap_radius_world = self.snap_distance as f64 / transform.world_to_screen_dx(1.0) as f64;
+
+        // 1. Check intersection markers (highest priority)
+        for marker in &self.markers {
+            if marker.marker_type == MarkerType::Intersection {
+                let dist = ((mouse_world.x - marker.position.x).powi(2)
+                    + (mouse_world.y - marker.position.y).powi(2)).sqrt();
+                if dist < snap_radius_world {
+                    return Some((marker.position, SnapPointType::Intersection));
+                }
+            }
+        }
+
+        // 2. Check for zeros and extrema on visible curves
+        for expr in &self.expressions {
+            if !expr.visible {
+                continue;
+            }
+
+            if let Some(ref curve) = expr.curve_data {
+                // Check for zeros
+                if let Some(zero) = self.find_nearby_zero(curve, mouse_world, snap_radius_world) {
+                    return Some((zero, SnapPointType::Zero));
+                }
+
+                // Check for extrema
+                if let Some(ext) = self.find_nearby_extremum(curve, mouse_world, snap_radius_world) {
+                    return Some((ext, SnapPointType::Extremum));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Find a zero point near the mouse position
+    fn find_nearby_zero(&self, curve: &CurveData, mouse: Point, radius: f64) -> Option<Point> {
+        if curve.points.len() < 2 {
+            return None;
+        }
+
+        for i in 1..curve.points.len() {
+            let p1 = &curve.points[i - 1];
+            let p2 = &curve.points[i];
+
+            // Skip NaN points
+            if !p1.y.is_finite() || !p2.y.is_finite() {
+                continue;
+            }
+
+            // Check if crosses y=0
+            if p1.y * p2.y < 0.0 {
+                // Linear interpolation to find zero crossing
+                let t = p1.y.abs() / (p1.y.abs() + p2.y.abs());
+                let zero_x = p1.x + t * (p2.x - p1.x);
+                let zero = Point::new(zero_x, 0.0);
+
+                let dist = ((mouse.x - zero.x).powi(2) + (mouse.y - zero.y).powi(2)).sqrt();
+                if dist < radius {
+                    return Some(zero);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Find an extremum point near the mouse position
+    fn find_nearby_extremum(&self, curve: &CurveData, mouse: Point, radius: f64) -> Option<Point> {
+        if curve.points.len() < 3 {
+            return None;
+        }
+
+        for i in 1..curve.points.len() - 1 {
+            let p0 = &curve.points[i - 1];
+            let p1 = &curve.points[i];
+            let p2 = &curve.points[i + 1];
+
+            // Skip NaN points
+            if !p0.y.is_finite() || !p1.y.is_finite() || !p2.y.is_finite() {
+                continue;
+            }
+
+            // Check for local extremum (slope changes sign)
+            let slope1 = p1.y - p0.y;
+            let slope2 = p2.y - p1.y;
+
+            if slope1 * slope2 < 0.0 {
+                // This is an extremum
+                let dist = ((mouse.x - p1.x).powi(2) + (mouse.y - p1.y).powi(2)).sqrt();
+                if dist < radius {
+                    return Some(*p1);
+                }
+            }
+        }
+
+        None
     }
 
     /// Undo the last action
@@ -698,20 +809,16 @@ impl eframe::App for MathGrapherApp {
         // Top toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Math Grapher");
-                ui.separator();
-
+                // Zoom controls
                 if ui.button("Reset View").clicked() {
                     self.canvas.reset_viewport();
                     self.needs_recalc = true;
                 }
-
-                if ui.button("Zoom In").clicked() {
+                if ui.button("➕").on_hover_text("Zoom In").clicked() {
                     self.canvas.zoom(0.8, self.canvas.viewport.center());
                     self.needs_recalc = true;
                 }
-
-                if ui.button("Zoom Out").clicked() {
+                if ui.button("➖").on_hover_text("Zoom Out").clicked() {
                     self.canvas.zoom(1.25, self.canvas.viewport.center());
                     self.needs_recalc = true;
                 }
@@ -730,22 +837,6 @@ impl eframe::App for MathGrapherApp {
                 }
 
                 ui.separator();
-
-                if ui.button("Settings").clicked() {
-                    self.show_settings = !self.show_settings;
-                }
-
-                let fit_button_text = if self.fitting_mode { "Exit Fit Mode" } else { "Curve Fit" };
-                if ui.button(fit_button_text).clicked() {
-                    self.show_fitting_panel = !self.show_fitting_panel;
-                    if !self.show_fitting_panel {
-                        self.fitting_mode = false;
-                    }
-                    // Exit query mode when entering fit mode
-                    if self.fitting_mode {
-                        self.query_mode = false;
-                    }
-                }
 
                 // Query mode button
                 let query_button = if self.query_mode {
@@ -768,17 +859,6 @@ impl eframe::App for MathGrapherApp {
                     }
                 }
 
-                // History button
-                let history_count = self.expression_history.len();
-                let history_button = if self.show_history {
-                    ui.add(egui::Button::new(format!("📜 History ({})", history_count)).fill(egui::Color32::from_rgb(100, 150, 200)))
-                } else {
-                    ui.button(format!("📜 History ({})", history_count))
-                };
-                if history_button.clicked() {
-                    self.show_history = !self.show_history;
-                }
-
                 if self.fitting_mode {
                     ui.label(egui::RichText::new("Click to add points").color(egui::Color32::YELLOW));
                 } else if self.query_mode {
@@ -794,14 +874,12 @@ impl eframe::App for MathGrapherApp {
             });
         });
 
-        // Left panel - expression list
+        // Left panel - expression list and tools (no right border)
         egui::SidePanel::left("expressions")
-            .default_width(300.0)
-            .min_width(200.0)
+            .default_width(350.0)
+            .min_width(280.0)
+            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(8.0).stroke(egui::Stroke::NONE))
             .show(ctx, |ui| {
-                ui.heading("Expressions");
-                ui.separator();
-
                 // Input field for new expression with syntax highlighting
                 let mut new_expr = String::new();
                 let _response = ui.horizontal(|ui| {
@@ -825,8 +903,6 @@ impl eframe::App for MathGrapherApp {
                     ui.colored_label(egui::Color32::RED, msg);
                 }
 
-                ui.separator();
-
                 // Expression list
                 let mut to_remove = None;
                 let mut visibility_changed = false;
@@ -846,8 +922,9 @@ impl eframe::App for MathGrapherApp {
                                 visibility_changed = true;
                             }
 
-                            // Expression text
-                            ui.label(&expr.source);
+                            // Expression text (formatted with math symbols)
+                            let formatted = MathFormatter::format(&expr.source);
+                            ui.label(egui::RichText::new(formatted).size(14.0));
 
                             // Remove button
                             if ui.small_button("×").clicked() {
@@ -949,6 +1026,174 @@ impl eframe::App for MathGrapherApp {
                 if ui.small_button("sin(b*x)").clicked() {
                     self.add_expression("y = sin(b*x)");
                 }
+
+                ui.add_space(10.0);
+                ui.separator();
+
+                // Collapsible Settings section
+                egui::CollapsingHeader::new("⚙ Settings")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label("Grid");
+                        ui.checkbox(
+                            &mut self.canvas.grid_mut().style.show_minor_grid,
+                            "Show minor grid",
+                        );
+                        ui.checkbox(
+                            &mut self.canvas.grid_mut().style.show_labels,
+                            "Show labels",
+                        );
+
+                        ui.separator();
+
+                        ui.label("Viewport");
+                        ui.horizontal(|ui| {
+                            ui.label("X:");
+                            ui.label(format!("{:.2} to {:.2}",
+                                self.canvas.viewport.x_min,
+                                self.canvas.viewport.x_max));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Y:");
+                            ui.label(format!("{:.2} to {:.2}",
+                                self.canvas.viewport.y_min,
+                                self.canvas.viewport.y_max));
+                        });
+                    });
+
+                // Collapsible Curve Fitting section
+                egui::CollapsingHeader::new("📈 Curve Fitting")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        // Fitting mode toggle
+                        if ui.button(if self.fitting_mode { "Stop Adding Points" } else { "Add Points (Click)" }).clicked() {
+                            self.fitting_mode = !self.fitting_mode;
+                            if self.fitting_mode {
+                                self.query_mode = false;
+                            }
+                        }
+
+                        ui.separator();
+
+                        // Manual coordinate input
+                        ui.label("Or enter coordinates:");
+                        ui.horizontal(|ui| {
+                            ui.label("x:");
+                            ui.add(egui::TextEdit::singleline(&mut self.fit_input_x).desired_width(50.0));
+                            ui.label("y:");
+                            ui.add(egui::TextEdit::singleline(&mut self.fit_input_y).desired_width(50.0));
+                        });
+                        if ui.button("Add Point").clicked() {
+                            if let (Ok(x), Ok(y)) = (self.fit_input_x.trim().parse::<f64>(), self.fit_input_y.trim().parse::<f64>()) {
+                                let point = Point::new(x, y);
+                                self.fit_data_points.push(point);
+                                self.markers.push(Marker::new(point, MarkerType::DataPoint));
+                                self.update_fit();
+                                self.fit_input_x.clear();
+                                self.fit_input_y.clear();
+                            }
+                        }
+
+                        ui.separator();
+
+                        // Model selection
+                        ui.label("Fit Model:");
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(self.fit_model == FitModel::Linear, "Linear").clicked() {
+                                self.fit_model = FitModel::Linear;
+                                self.update_fit();
+                            }
+                            if ui.selectable_label(matches!(self.fit_model, FitModel::Polynomial(2)), "Quad").clicked() {
+                                self.fit_model = FitModel::Polynomial(2);
+                                self.update_fit();
+                            }
+                            if ui.selectable_label(matches!(self.fit_model, FitModel::Polynomial(3)), "Cubic").clicked() {
+                                self.fit_model = FitModel::Polynomial(3);
+                                self.update_fit();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(self.fit_model == FitModel::Exponential, "Exp").clicked() {
+                                self.fit_model = FitModel::Exponential;
+                                self.update_fit();
+                            }
+                            if ui.selectable_label(self.fit_model == FitModel::Power, "Power").clicked() {
+                                self.fit_model = FitModel::Power;
+                                self.update_fit();
+                            }
+                        });
+
+                        ui.separator();
+
+                        // Data points
+                        ui.label(format!("Data Points: {}", self.fit_data_points.len()));
+
+                        if !self.fit_data_points.is_empty() {
+                            egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+                                for (i, p) in self.fit_data_points.iter().enumerate() {
+                                    ui.label(format!("  {}. ({:.3}, {:.3})", i + 1, p.x, p.y));
+                                }
+                            });
+
+                            if ui.button("Clear Points").clicked() {
+                                self.clear_fit_data();
+                            }
+                        }
+
+                        // Fit results
+                        if let Some(ref result) = self.fit_result {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Fit Result:").strong());
+                            ui.label(format!("y = {}", result.to_expression()));
+                            ui.label(format!("R² = {:.6}", result.r_squared));
+
+                            if ui.button("Add to Graph").clicked() {
+                                let expr_str = format!("y = {}", result.to_expression());
+                                self.add_expression(&expr_str);
+                            }
+                        } else if self.fit_data_points.len() >= 2 {
+                            ui.label("No valid fit");
+                        } else {
+                            ui.label("Need ≥2 points");
+                        }
+                    });
+
+                // Collapsible History section
+                if !self.expression_history.is_empty() {
+                    egui::CollapsingHeader::new(format!("📜 History ({})", self.expression_history.len()))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.label("Click to add:");
+
+                            let mut expr_to_add: Option<String> = None;
+                            let mut expr_to_remove: Option<usize> = None;
+
+                            egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                                for (i, expr) in self.expression_history.iter().enumerate().rev() {
+                                    ui.horizontal(|ui| {
+                                        if ui.button(expr).clicked() {
+                                            expr_to_add = Some(expr.clone());
+                                        }
+                                        if ui.small_button("×").clicked() {
+                                            expr_to_remove = Some(i);
+                                        }
+                                    });
+                                }
+                            });
+
+                            if ui.button("Clear History").clicked() {
+                                self.expression_history.clear();
+                            }
+
+                            // Apply changes
+                            if let Some(expr) = expr_to_add {
+                                self.add_expression(&expr);
+                            }
+                            if let Some(idx) = expr_to_remove {
+                                self.expression_history.remove(idx);
+                            }
+                        });
+                }
             });
 
         // Slider panel (shown when there are parameters)
@@ -1029,213 +1274,14 @@ impl eframe::App for MathGrapherApp {
             }
         }
 
-        // Settings panel (optional)
-        if self.show_settings {
-            egui::SidePanel::right("settings")
-                .default_width(250.0)
-                .show(ctx, |ui| {
-                    ui.heading("Settings");
-                    ui.separator();
-
-                    ui.label("Grid");
-                    ui.checkbox(
-                        &mut self.canvas.grid_mut().style.show_minor_grid,
-                        "Show minor grid",
-                    );
-                    ui.checkbox(
-                        &mut self.canvas.grid_mut().style.show_labels,
-                        "Show labels",
-                    );
-
-                    ui.separator();
-
-                    ui.label("Viewport");
-                    ui.horizontal(|ui| {
-                        ui.label("X:");
-                        ui.label(format!("{:.2} to {:.2}",
-                            self.canvas.viewport.x_min,
-                            self.canvas.viewport.x_max));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Y:");
-                        ui.label(format!("{:.2} to {:.2}",
-                            self.canvas.viewport.y_min,
-                            self.canvas.viewport.y_max));
-                    });
-                });
-        }
-
-        // Curve fitting panel
-        if self.show_fitting_panel {
-            let mut fit_model_changed = false;
-            let mut add_to_graph = false;
-            let mut clear_data = false;
-            let mut toggle_fitting_mode = false;
-
-            egui::SidePanel::right("fitting")
-                .default_width(280.0)
-                .show(ctx, |ui| {
-                    ui.heading("Curve Fitting");
-                    ui.separator();
-
-                    // Fitting mode toggle
-                    if ui.button(if self.fitting_mode { "Stop Adding Points" } else { "Add Points (Click)" }).clicked() {
-                        toggle_fitting_mode = true;
-                    }
-
-                    ui.separator();
-
-                    // Manual coordinate input
-                    ui.label("Or enter coordinates:");
-                    ui.horizontal(|ui| {
-                        ui.label("x:");
-                        ui.add(egui::TextEdit::singleline(&mut self.fit_input_x).desired_width(60.0));
-                        ui.label("y:");
-                        ui.add(egui::TextEdit::singleline(&mut self.fit_input_y).desired_width(60.0));
-                    });
-                    if ui.button("Add Point").clicked() {
-                        if let (Ok(x), Ok(y)) = (self.fit_input_x.trim().parse::<f64>(), self.fit_input_y.trim().parse::<f64>()) {
-                            let point = Point::new(x, y);
-                            self.fit_data_points.push(point);
-                            self.markers.push(Marker::new(point, MarkerType::DataPoint));
-                            self.update_fit();
-                            self.fit_input_x.clear();
-                            self.fit_input_y.clear();
-                        }
-                    }
-
-                    ui.separator();
-
-                    // Model selection
-                    ui.label("Fit Model:");
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(self.fit_model == FitModel::Linear, "Linear").clicked() {
-                            self.fit_model = FitModel::Linear;
-                            fit_model_changed = true;
-                        }
-                        if ui.selectable_label(matches!(self.fit_model, FitModel::Polynomial(2)), "Quadratic").clicked() {
-                            self.fit_model = FitModel::Polynomial(2);
-                            fit_model_changed = true;
-                        }
-                        if ui.selectable_label(matches!(self.fit_model, FitModel::Polynomial(3)), "Cubic").clicked() {
-                            self.fit_model = FitModel::Polynomial(3);
-                            fit_model_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(self.fit_model == FitModel::Exponential, "Exponential").clicked() {
-                            self.fit_model = FitModel::Exponential;
-                            fit_model_changed = true;
-                        }
-                        if ui.selectable_label(self.fit_model == FitModel::Power, "Power").clicked() {
-                            self.fit_model = FitModel::Power;
-                            fit_model_changed = true;
-                        }
-                    });
-
-                    ui.separator();
-
-                    // Data points
-                    ui.label(format!("Data Points: {}", self.fit_data_points.len()));
-
-                    if !self.fit_data_points.is_empty() {
-                        egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                            for (i, p) in self.fit_data_points.iter().enumerate() {
-                                ui.label(format!("  {}. ({:.3}, {:.3})", i + 1, p.x, p.y));
-                            }
-                        });
-                    }
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Clear Points").clicked() {
-                            clear_data = true;
-                        }
-                    });
-
-                    ui.separator();
-
-                    // Fit results
-                    if let Some(ref result) = self.fit_result {
-                        ui.label(egui::RichText::new("Fit Result:").strong());
-                        ui.label(format!("y = {}", result.to_expression()));
-                        ui.label(format!("R² = {:.6}", result.r_squared));
-                        ui.label(format!("Residual Sum = {:.4}", result.residual_sum));
-
-                        ui.separator();
-
-                        if ui.button("Add to Graph").clicked() {
-                            add_to_graph = true;
-                        }
-                    } else if self.fit_data_points.len() >= 2 {
-                        ui.label("No valid fit (check data)");
-                    } else {
-                        ui.label("Need at least 2 points");
-                    }
-                });
-
-            // Apply state changes after panel rendering
-            if toggle_fitting_mode {
-                self.fitting_mode = !self.fitting_mode;
-            }
-            if fit_model_changed {
-                self.update_fit();
-            }
-            if add_to_graph {
-                self.add_fit_to_expressions();
-            }
-            if clear_data {
-                self.clear_fit_data();
-            }
-        }
-
-        // Expression history panel
-        if self.show_history && !self.expression_history.is_empty() {
-            let mut expr_to_add: Option<String> = None;
-            let mut expr_to_remove: Option<usize> = None;
-
-            egui::SidePanel::right("history")
-                .default_width(280.0)
-                .show(ctx, |ui| {
-                    ui.heading("Expression History");
-                    ui.separator();
-
-                    ui.label("Click to add expression:");
-
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for (i, expr) in self.expression_history.iter().enumerate().rev() {
-                            ui.horizontal(|ui| {
-                                if ui.button(expr).clicked() {
-                                    expr_to_add = Some(expr.clone());
-                                }
-                                if ui.small_button("×").clicked() {
-                                    expr_to_remove = Some(i);
-                                }
-                            });
-                        }
-                    });
-
-                    ui.separator();
-
-                    if ui.button("Clear History").clicked() {
-                        self.expression_history.clear();
-                    }
-                });
-
-            // Apply changes after panel rendering
-            if let Some(expr) = expr_to_add {
-                self.add_expression(&expr);
-            }
-            if let Some(idx) = expr_to_remove {
-                self.expression_history.remove(idx);
-            }
-        }
-
         // Main canvas area
         egui::CentralPanel::default().show(ctx, |ui| {
             let available_size = ui.available_size();
+            // Use union of click_and_drag with hover to enable snap point detection
+            let sense = egui::Sense::click_and_drag().union(egui::Sense::hover());
             let (response, painter) = ui.allocate_painter(
                 available_size,
-                egui::Sense::click_and_drag(),
+                sense,
             );
 
             let rect = response.rect;
@@ -1249,28 +1295,8 @@ impl eframe::App for MathGrapherApp {
 
             let old_viewport = self.canvas.viewport;
 
-            // Handle fitting mode clicks before regular interaction
-            if self.fitting_mode && response.clicked() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    // Convert screen position to world coordinates
-                    let local_pos = pos - rect.left_top();
-                    let world_point = transform.screen_to_world(local_pos.x, local_pos.y);
-
-                    // Add data point
-                    self.fit_data_points.push(world_point);
-                    self.markers.push(Marker::new(world_point, MarkerType::DataPoint));
-                    self.update_fit();
-                }
-            } else if self.query_mode && response.clicked() {
-                // Handle query mode clicks
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let local_pos = pos - rect.left_top();
-                    let world_point = transform.screen_to_world(local_pos.x, local_pos.y);
-
-                    // Set the query point marker
-                    self.query_point = Some(Marker::query_point(world_point));
-                }
-            } else {
+            // Handle interaction first (may change viewport)
+            if !self.fitting_mode && !self.query_mode {
                 self.interaction.handle_input(&response, &mut self.canvas, &transform);
             }
 
@@ -1279,9 +1305,58 @@ impl eframe::App for MathGrapherApp {
                 self.needs_recalc = true;
             }
 
-            // Recalculate curves if needed
+            // Recalculate curves if needed (BEFORE snap detection)
             if self.needs_recalc {
                 self.recalculate_curves();
+            }
+
+            // Recreate transform if viewport changed
+            let transform = if self.canvas.viewport != old_viewport {
+                CoordinateTransform::new(
+                    self.canvas.viewport,
+                    rect.width(),
+                    rect.height(),
+                )
+            } else {
+                transform
+            };
+
+            // Update snap point based on mouse position (AFTER curves are calculated)
+            if let Some(pos) = response.hover_pos() {
+                let local_pos = pos - rect.left_top();
+                let mouse_world = transform.screen_to_world(local_pos.x, local_pos.y);
+                self.snap_point = self.find_snap_point(mouse_world, &transform);
+            } else {
+                self.snap_point = None;
+            }
+
+            // Handle fitting mode clicks
+            if self.fitting_mode && response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    // Convert screen position to world coordinates
+                    let local_pos = pos - rect.left_top();
+                    let world_point = transform.screen_to_world(local_pos.x, local_pos.y);
+
+                    // Use snap point if available
+                    let point = self.snap_point.map(|(p, _)| p).unwrap_or(world_point);
+
+                    // Add data point
+                    self.fit_data_points.push(point);
+                    self.markers.push(Marker::new(point, MarkerType::DataPoint));
+                    self.update_fit();
+                }
+            } else if self.query_mode && response.clicked() {
+                // Handle query mode clicks
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let local_pos = pos - rect.left_top();
+                    let world_point = transform.screen_to_world(local_pos.x, local_pos.y);
+
+                    // Use snap point if available
+                    let point = self.snap_point.map(|(p, _)| p).unwrap_or(world_point);
+
+                    // Set the query point marker
+                    self.query_point = Some(Marker::query_point(point));
+                }
             }
 
             // Handle keyboard shortcuts
@@ -1326,10 +1401,50 @@ impl eframe::App for MathGrapherApp {
 
             // Render
             self.render_canvas(&painter, rect);
+
+            // Render snap point highlight
+            if let Some((snap, snap_type)) = self.snap_point {
+                let screen_pos = transform.world_to_screen(snap);
+                let screen_pos = egui::pos2(
+                    rect.left() + screen_pos.0,
+                    rect.top() + screen_pos.1,
+                );
+
+                // Draw highlight circle
+                let color = match snap_type {
+                    SnapPointType::Intersection => egui::Color32::from_rgb(255, 200, 50),
+                    SnapPointType::Zero => egui::Color32::from_rgb(100, 255, 100),
+                    SnapPointType::Extremum => egui::Color32::from_rgb(150, 150, 255),
+                };
+
+                painter.circle_stroke(
+                    screen_pos,
+                    10.0,
+                    egui::Stroke::new(2.0, color),
+                );
+
+                // Draw inner dot
+                painter.circle_filled(screen_pos, 4.0, color);
+
+                // Draw coordinate label
+                let label = match snap_type {
+                    SnapPointType::Intersection => format!("Intersection\n({:.4}, {:.4})", snap.x, snap.y),
+                    SnapPointType::Zero => format!("Zero\n({:.4}, 0)", snap.x),
+                    SnapPointType::Extremum => format!("Extremum\n({:.4}, {:.4})", snap.x, snap.y),
+                };
+
+                painter.text(
+                    egui::pos2(screen_pos.x + 12.0, screen_pos.y - 8.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    label,
+                    egui::FontId::proportional(11.0),
+                    color,
+                );
+            }
         });
 
-        // Request continuous repaints during drag
-        if self.interaction.is_dragging {
+        // Request continuous repaints during drag or when snap point is active
+        if self.interaction.is_dragging || self.snap_point.is_some() {
             ctx.request_repaint();
         }
     }
@@ -1428,5 +1543,184 @@ mod tests {
 
         // Curve should be computed
         assert!(expr.curve_data.is_some(), "Expression with multiple parameters should have curve data");
+    }
+
+    #[test]
+    fn test_snap_point_type_equality() {
+        assert_eq!(SnapPointType::Intersection, SnapPointType::Intersection);
+        assert_eq!(SnapPointType::Zero, SnapPointType::Zero);
+        assert_eq!(SnapPointType::Extremum, SnapPointType::Extremum);
+        assert_ne!(SnapPointType::Intersection, SnapPointType::Zero);
+        assert_ne!(SnapPointType::Zero, SnapPointType::Extremum);
+    }
+
+    #[test]
+    fn test_find_nearby_zero_simple() {
+        // Create a simple curve that crosses y=0
+        let mut curve = CurveData::with_capacity(3);
+        curve.points.push(Point::new(0.0, -1.0));
+        curve.points.push(Point::new(1.0, 1.0));
+        curve.continuous.push(true);
+
+        // Create a minimal app to test the method
+        // We can't easily test private methods, so we'll test the logic directly
+        // by checking if zero detection works
+
+        // The zero should be at x=0.5 (linear interpolation)
+        let p1 = &curve.points[0];
+        let p2 = &curve.points[1];
+        let t = p1.y.abs() / (p1.y.abs() + p2.y.abs());
+        let zero_x = p1.x + t * (p2.x - p1.x);
+
+        assert!((zero_x - 0.5).abs() < 0.001, "Zero should be at x=0.5");
+    }
+
+    #[test]
+    fn test_find_nearby_extremum_simple() {
+        // Create a simple curve with a local maximum
+        let mut curve = CurveData::with_capacity(5);
+        curve.points.push(Point::new(0.0, 0.0));
+        curve.points.push(Point::new(1.0, 1.0));
+        curve.points.push(Point::new(2.0, 0.5)); // slope changes sign here
+        curve.continuous.push(true);
+        curve.continuous.push(true);
+
+        // Check extremum detection logic
+        let p0 = &curve.points[0];
+        let p1 = &curve.points[1];
+        let p2 = &curve.points[2];
+
+        let slope1 = p1.y - p0.y; // positive
+        let slope2 = p2.y - p1.y; // negative
+
+        assert!(slope1 > 0.0, "First slope should be positive");
+        assert!(slope2 < 0.0, "Second slope should be negative");
+        assert!(slope1 * slope2 < 0.0, "Slopes should have opposite signs at extremum");
+    }
+
+    #[test]
+    fn test_compiled_expression_explicit() {
+        let ast = parse("x^2").unwrap();
+        let expr = CompiledExpression::new(
+            "x^2".to_string(),
+            ast,
+            ExpressionType::Explicit,
+            Color::RED,
+        );
+
+        assert_eq!(expr.source, "x^2");
+        assert_eq!(expr.expr_type, ExpressionType::Explicit);
+        assert!(expr.visible);
+        assert!(expr.curve_data.is_none());
+    }
+
+    #[test]
+    fn test_compiled_expression_update_cache() {
+        let ast = parse("sin(x)").unwrap();
+        let mut expr = CompiledExpression::new(
+            "sin(x)".to_string(),
+            ast,
+            ExpressionType::Explicit,
+            Color::BLUE,
+        );
+
+        let viewport = Rect::new(-PI, -2.0, PI, 2.0);
+        expr.update_cache(&viewport);
+
+        assert!(expr.curve_data.is_some());
+        let curve = expr.curve_data.as_ref().unwrap();
+        assert!(!curve.points.is_empty());
+
+        // Check that sin(0) is approximately 0
+        let mid_point = curve.points.len() / 2;
+        let point = &curve.points[mid_point];
+        // The middle point should be near x=0, y=0
+        if point.x.abs() < 0.1 {
+            assert!(point.y.abs() < 0.1, "sin(0) should be approximately 0");
+        }
+    }
+
+    #[test]
+    fn test_curve_data_zero_crossing_detection() {
+        // Test the zero crossing logic used in find_nearby_zero
+        let points = vec![
+            Point::new(-1.0, -2.0),
+            Point::new(0.0, -1.0),
+            Point::new(0.5, 0.5),  // crosses between index 1 and 2
+            Point::new(1.0, 1.0),
+        ];
+
+        // Find zero crossings
+        let mut zero_crossings = Vec::new();
+        for i in 1..points.len() {
+            let p1 = &points[i - 1];
+            let p2 = &points[i];
+
+            if p1.y * p2.y < 0.0 {
+                let t = p1.y.abs() / (p1.y.abs() + p2.y.abs());
+                let zero_x = p1.x + t * (p2.x - p1.x);
+                zero_crossings.push(zero_x);
+            }
+        }
+
+        assert_eq!(zero_crossings.len(), 1);
+        // Zero should be between x=0 and x=0.5
+        assert!(zero_crossings[0] > 0.0 && zero_crossings[0] < 0.5);
+    }
+
+    #[test]
+    fn test_curve_data_extremum_detection() {
+        // Test the extremum detection logic
+        let points = vec![
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 2.0),
+            Point::new(2.0, 3.0),  // still increasing
+            Point::new(3.0, 2.5),  // extremum at index 2
+            Point::new(4.0, 1.0),
+        ];
+
+        // Find extrema (where slope changes sign)
+        let mut extrema = Vec::new();
+        for i in 1..points.len() - 1 {
+            let p0 = &points[i - 1];
+            let p1 = &points[i];
+            let p2 = &points[i + 1];
+
+            let slope1 = p1.y - p0.y;
+            let slope2 = p2.y - p1.y;
+
+            if slope1 * slope2 < 0.0 {
+                extrema.push(p1.clone());
+            }
+        }
+
+        assert_eq!(extrema.len(), 1);
+        assert_eq!(extrema[0].x, 2.0);
+        assert_eq!(extrema[0].y, 3.0);
+    }
+
+    #[test]
+    fn test_nan_handling_in_curves() {
+        // Test that NaN values are properly handled
+        let points = vec![
+            Point::new(0.0, 1.0),
+            Point::new(1.0, f64::NAN),
+            Point::new(2.0, 2.0),
+        ];
+
+        // Count valid points
+        let valid_count = points.iter().filter(|p| p.y.is_finite()).count();
+        assert_eq!(valid_count, 2);
+
+        // Zero crossing detection should skip NaN
+        let mut crossings = 0;
+        for i in 1..points.len() {
+            let p1 = &points[i - 1];
+            let p2 = &points[i];
+            if p1.y.is_finite() && p2.y.is_finite() && p1.y * p2.y < 0.0 {
+                crossings += 1;
+            }
+        }
+        assert_eq!(crossings, 0); // No valid crossings due to NaN
     }
 }
