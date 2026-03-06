@@ -1,0 +1,53 @@
+[package]
+name = "math-grapher"
+version = "0.1.0"
+edition = "2021"
+authors = ["Math Grapher Team"]
+description = "A Desmos-like mathematical graphing calculator built with Rust"
+license = "MIT"
+
+[dependencies]
+# GUI Framework
+eframe = { version = "0.30", features = ["wgpu"] }
+egui = "0.30"
+egui_extras = "0.30"
+
+# GPU Rendering
+wgpu = "23"
+
+# Linear Algebra
+nalgebra = "0.33"
+
+# Math Expression Parsing
+meval = "0.2"
+
+# Custom Grammar Parser
+pest = "2.7"
+pest_derive = "2.7"
+
+# Optimization (for curve fitting)
+argmin = "0.10"
+argmin-math = { version = "0.4", features = ["nalgebra_latest"] }
+
+# Parallel Computing
+rayon = "1.10"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+criterion = "0.5"
+approx = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
