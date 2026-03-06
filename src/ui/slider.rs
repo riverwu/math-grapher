@@ -23,7 +23,7 @@ impl Default for SliderConfig {
             min: -10.0,
             max: 10.0,
             step: 0.0,
-            default: 0.0,
+            default: 1.0,  // Default to 1 for mathematical expressions
             show_value: true,
             precision: 2,
         }
@@ -32,10 +32,16 @@ impl Default for SliderConfig {
 
 impl SliderConfig {
     pub fn new(min: f64, max: f64) -> Self {
+        // Default to 1.0 if within range, otherwise use midpoint
+        let default = if min <= 1.0 && 1.0 <= max {
+            1.0
+        } else {
+            (min + max) / 2.0
+        };
         Self {
             min,
             max,
-            default: (min + max) / 2.0,
+            default,
             ..Default::default()
         }
     }
@@ -172,7 +178,7 @@ mod tests {
     fn test_slider_creation() {
         let slider = ParameterSlider::with_range("a", -5.0, 5.0);
         assert_eq!(slider.name, "a");
-        assert_eq!(slider.value, 0.0);
+        assert_eq!(slider.value, 1.0);  // Default is now 1.0
         assert_eq!(slider.config.min, -5.0);
         assert_eq!(slider.config.max, 5.0);
     }
@@ -199,7 +205,8 @@ mod tests {
     #[test]
     fn test_slider_normalized() {
         let slider = ParameterSlider::with_range("a", 0.0, 100.0);
-        assert!((slider.normalized() - 0.5).abs() < 0.001);
+        // Default is 1.0, normalized = (1 - 0) / (100 - 0) = 0.01
+        assert!((slider.normalized() - 0.01).abs() < 0.001);
 
         let mut slider2 = ParameterSlider::with_range("b", -10.0, 10.0);
         slider2.set_normalized(0.75);

@@ -3,10 +3,14 @@
 //! Parses mathematical expressions into an AST for evaluation.
 
 mod ast;
+mod hints;
+mod latex;
 mod lexer;
 mod validator;
 
 pub use ast::{AstNode, BinaryOp, UnaryOp, Function, ExpressionType, ComparisonOp, ParsedEquation};
+pub use hints::{ErrorHint, generate_hint, validate_with_hints};
+pub use latex::{convert_latex, is_latex_input, LatexConverter};
 pub use lexer::{Token, Lexer, LexerError};
 pub use validator::{validate_expression, ValidationError};
 
@@ -181,6 +185,7 @@ impl Parser {
         Ok(ParsedEquation::Parametric { x_ast, y_ast })
     }
 
+    #[allow(dead_code)]
     fn determine_expression_type(&self, left: &AstNode, _right: &AstNode) -> ExpressionType {
         // Check if left side is just "y"
         if let AstNode::Variable(name) = left {

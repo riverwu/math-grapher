@@ -18,6 +18,8 @@ pub enum MarkerType {
     UserPoint,
     /// Data point for curve fitting
     DataPoint,
+    /// Query point (click to see coordinates)
+    QueryPoint,
 }
 
 /// A marker at a specific point
@@ -70,6 +72,12 @@ impl Marker {
         let label = format!("({:.3}, {:.3})", position.x, position.y);
         let marker_type = if is_max { MarkerType::Maximum } else { MarkerType::Minimum };
         Self::new(position, marker_type).with_label(label)
+    }
+
+    /// Create a query point marker (for click-to-query coordinates)
+    pub fn query_point(position: Point) -> Self {
+        let label = format!("({:.4}, {:.4})", position.x, position.y);
+        Self::new(position, MarkerType::QueryPoint).with_label(label)
     }
 }
 
@@ -143,6 +151,15 @@ impl MarkerStyle {
                 show_label: false,
                 ..Default::default()
             },
+            MarkerType::QueryPoint => Self {
+                radius: 6.0,
+                fill_color: Color::rgb(0.1, 0.7, 0.9),
+                stroke_color: Color::rgb(0.05, 0.4, 0.6),
+                stroke_width: 2.0,
+                show_label: true,
+                label_color: Color::rgb(0.0, 0.0, 0.0),
+                label_offset: (10.0, -10.0),
+            },
         }
     }
 }
@@ -162,6 +179,7 @@ impl MarkerRenderer {
         styles.insert(MarkerType::Root, MarkerStyle::for_type(MarkerType::Root));
         styles.insert(MarkerType::UserPoint, MarkerStyle::for_type(MarkerType::UserPoint));
         styles.insert(MarkerType::DataPoint, MarkerStyle::for_type(MarkerType::DataPoint));
+        styles.insert(MarkerType::QueryPoint, MarkerStyle::for_type(MarkerType::QueryPoint));
 
         Self {
             default_styles: styles,
@@ -255,5 +273,22 @@ mod tests {
 
         assert_eq!(marker.label, Some("origin".to_string()));
         assert_eq!(marker.color, Some(Color::RED));
+    }
+
+    #[test]
+    fn test_query_point_marker() {
+        let marker = Marker::query_point(Point::new(1.5, -2.25));
+        assert_eq!(marker.marker_type, MarkerType::QueryPoint);
+        assert!(marker.label.is_some());
+        let label = marker.label.unwrap();
+        assert!(label.contains("1.5"));
+        assert!(label.contains("-2.25"));
+    }
+
+    #[test]
+    fn test_query_point_style() {
+        let style = MarkerStyle::for_type(MarkerType::QueryPoint);
+        assert_eq!(style.radius, 6.0);
+        assert!(style.show_label);
     }
 }

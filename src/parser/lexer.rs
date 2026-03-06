@@ -191,7 +191,7 @@ impl<'a> Lexer<'a> {
             .map_err(|_| LexerError::InvalidNumber(num_str.to_string()))
     }
 
-    fn read_identifier(&mut self, first: char) -> Result<Token, LexerError> {
+    fn read_identifier(&mut self, _first: char) -> Result<Token, LexerError> {
         let start = self.current_pos;
 
         while let Some((_, ch)) = self.chars.peek() {

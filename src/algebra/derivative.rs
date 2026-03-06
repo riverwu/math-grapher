@@ -94,6 +94,7 @@ pub fn numerical_gradient(
 }
 
 /// Compute higher-order derivative using Richardson extrapolation
+#[allow(dead_code)]
 pub fn richardson_derivative(
     ast: &AstNode,
     x: f64,
@@ -126,10 +127,11 @@ pub fn richardson_derivative(
 }
 
 /// Find local extrema (maxima and minima) of a function
+#[allow(dead_code)]
 pub fn find_extrema(
     ast: &AstNode,
     x_range: (f64, f64),
-    tolerance: f64,
+    _tolerance: f64,
 ) -> Result<Vec<(f64, f64, bool)>, EvalError> {
     // Returns (x, y, is_maximum)
     let evaluator = Evaluator::new();
@@ -197,6 +199,7 @@ pub fn find_extrema(
 }
 
 /// Refine extremum location using bisection on derivative
+#[allow(dead_code)]
 fn refine_extremum(
     ast: &AstNode,
     mut a: f64,
@@ -227,10 +230,11 @@ fn refine_extremum(
 }
 
 /// Find inflection points (where second derivative changes sign)
+#[allow(dead_code)]
 pub fn find_inflection_points(
     ast: &AstNode,
     x_range: (f64, f64),
-    tolerance: f64,
+    _tolerance: f64,
 ) -> Result<Vec<(f64, f64)>, EvalError> {
     let evaluator = Evaluator::new();
     let mut ctx = EvalContext::new();

@@ -202,6 +202,7 @@ impl Default for AdaptiveSampler {
 }
 
 /// Compute numerical derivative using central difference
+#[allow(dead_code)]
 pub fn numerical_derivative(
     ast: &AstNode,
     x: f64,
@@ -220,6 +221,7 @@ pub fn numerical_derivative(
 }
 
 /// Compute numerical second derivative
+#[allow(dead_code)]
 pub fn numerical_second_derivative(
     ast: &AstNode,
     x: f64,

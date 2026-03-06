@@ -2,11 +2,13 @@
 
 use eframe::egui;
 use std::f64::consts::PI;
+use std::collections::HashMap;
 use crate::common::{Color, Point, Rect, CURVE_COLORS};
-use crate::parser::{parse_full_equation, ParsedEquation, ExpressionType, AstNode, ComparisonOp};
+use crate::parser::{parse_full_equation, ParsedEquation, ExpressionType, AstNode, ComparisonOp, generate_hint, is_latex_input, convert_latex};
 use crate::evaluator::{
-    evaluate_explicit, evaluate_implicit, evaluate_parametric, evaluate_polar,
-    evaluate_inequality, CurveData, InequalityRegion,
+    evaluate_explicit_with_params, evaluate_implicit,
+    evaluate_parametric, evaluate_polar, evaluate_inequality,
+    CurveData, InequalityRegion,
 };
 use crate::algebra::{find_intersections, CurveFitter, FitModel, FitResult};
 use crate::render::{
@@ -15,7 +17,7 @@ use crate::render::{
     RegionRenderer, RegionStyle,
 };
 
-use super::{ExpressionPanel, GraphView, SettingsPanel, ParameterSlider};
+use super::{ExpressionPanel, GraphView, SettingsPanel, ParameterSlider, syntax_highlighted_text_edit, History, Action};
 
 /// A compiled expression ready for rendering
 #[derive(Debug, Clone)]
@@ -40,10 +42,13 @@ pub struct CompiledExpression {
     pub inequality_region: Option<InequalityRegion>,
     /// Inequality comparison operator
     pub inequality_op: Option<ComparisonOp>,
+    /// Parameter names found in this expression
+    pub parameters: Vec<String>,
 }
 
 impl CompiledExpression {
     pub fn new(source: String, ast: AstNode, expr_type: ExpressionType, color: Color) -> Self {
+        let parameters = ast.get_parameters();
         Self {
             source,
             ast,
@@ -55,6 +60,7 @@ impl CompiledExpression {
             parametric_ast: None,
             inequality_region: None,
             inequality_op: None,
+            parameters,
         }
     }
 
@@ -65,6 +71,15 @@ impl CompiledExpression {
         y_ast: AstNode,
         color: Color,
     ) -> Self {
+        // Collect parameters from both x and y ASTs
+        let mut parameters = x_ast.get_parameters();
+        for p in y_ast.get_parameters() {
+            if !parameters.contains(&p) {
+                parameters.push(p);
+            }
+        }
+        parameters.sort();
+
         Self {
             source,
             ast: AstNode::Number(0.0), // Placeholder
@@ -76,6 +91,7 @@ impl CompiledExpression {
             parametric_ast: Some((x_ast, y_ast)),
             inequality_region: None,
             inequality_op: None,
+            parameters,
         }
     }
 
@@ -86,6 +102,7 @@ impl CompiledExpression {
         op: ComparisonOp,
         color: Color,
     ) -> Self {
+        let parameters = ast.get_parameters();
         Self {
             source,
             ast,
@@ -97,14 +114,20 @@ impl CompiledExpression {
             parametric_ast: None,
             inequality_region: None,
             inequality_op: Some(op),
+            parameters,
         }
     }
 
     /// Update the curve cache for current viewport
     pub fn update_cache(&mut self, viewport: &Rect) {
+        self.update_cache_with_params(viewport, &HashMap::new());
+    }
+
+    /// Update the curve cache with custom parameter values
+    pub fn update_cache_with_params(&mut self, viewport: &Rect, params: &HashMap<String, f64>) {
         match self.expr_type {
             ExpressionType::Explicit => {
-                match evaluate_explicit(&self.ast, viewport, 500) {
+                match evaluate_explicit_with_params(&self.ast, viewport, 500, params) {
                     Ok(data) => self.curve_data = Some(data),
                     Err(_) => self.curve_data = None,
                 }
@@ -147,9 +170,11 @@ impl CompiledExpression {
 pub struct MathGrapherApp {
     /// Expression panel state
     expression_panel: ExpressionPanel,
-    /// Graph view state
+    /// Graph view state (reserved for future use)
+    #[allow(dead_code)]
     graph_view: GraphView,
-    /// Settings panel state
+    /// Settings panel state (reserved for future use)
+    #[allow(dead_code)]
     settings_panel: SettingsPanel,
     /// Compiled expressions
     expressions: Vec<CompiledExpression>,
@@ -185,6 +210,26 @@ pub struct MathGrapherApp {
     fitting_mode: bool,
     /// Show fitting panel
     show_fitting_panel: bool,
+    /// Input field for fitting X coordinate
+    fit_input_x: String,
+    /// Input field for fitting Y coordinate
+    fit_input_y: String,
+
+    // Click-to-query coordinate
+    /// Query point for showing coordinates
+    query_point: Option<Marker>,
+    /// Is coordinate query mode active
+    query_mode: bool,
+
+    // Undo/Redo history
+    /// Action history for undo/redo
+    history: History,
+
+    // Expression history
+    /// Previously entered expressions (for quick re-input)
+    expression_history: Vec<String>,
+    /// Show expression history panel
+    show_history: bool,
 }
 
 impl MathGrapherApp {
@@ -210,15 +255,32 @@ impl MathGrapherApp {
             fit_result: None,
             fitting_mode: false,
             show_fitting_panel: false,
+            fit_input_x: String::new(),
+            fit_input_y: String::new(),
+            // Click-to-query
+            query_point: None,
+            query_mode: false,
+            // Undo/Redo
+            history: History::new(),
+            // Expression history
+            expression_history: Vec::new(),
+            show_history: false,
         }
     }
 
     /// Compile an expression and add it to the list
     fn add_expression(&mut self, source: &str) {
-        match parse_full_equation(source) {
+        // Convert LaTeX input if detected
+        let converted = if is_latex_input(source) {
+            convert_latex(source)
+        } else {
+            source.to_string()
+        };
+
+        match parse_full_equation(&converted) {
             Ok(parsed) => {
                 let color = CURVE_COLORS[self.expressions.len() % CURVE_COLORS.len()];
-                let mut expr = match parsed {
+                let expr = match parsed {
                     ParsedEquation::Explicit(ast) => {
                         CompiledExpression::new(source.to_string(), ast, ExpressionType::Explicit, color)
                     }
@@ -235,12 +297,51 @@ impl MathGrapherApp {
                         CompiledExpression::new_inequality(source.to_string(), expr, op, color)
                     }
                 };
-                expr.update_cache(&self.canvas.viewport);
+
+                // Record action for undo
+                let index = self.expressions.len();
+                self.history.record(Action::AddExpression {
+                    index,
+                    source: source.to_string(),
+                    color: expr.color,
+                    expr_type: expr.expr_type,
+                });
+
                 self.expressions.push(expr);
+
+                // Update sliders first (creates sliders with default value 1.0 for new parameters)
+                self.update_sliders_from_expressions();
+
+                // Now recalculate the newly added expression with actual slider values
+                // This ensures parameters have their default values when first drawn
+                let params: HashMap<String, f64> = self.sliders
+                    .iter()
+                    .map(|s| (s.name.clone(), s.value))
+                    .collect();
+                if let Some(expr) = self.expressions.last_mut() {
+                    expr.update_cache_with_params(&self.canvas.viewport, &params);
+                }
+
                 self.status_message = None;
+
+                // Add to expression history (if not already present)
+                if !self.expression_history.contains(&source.to_string()) {
+                    self.expression_history.push(source.to_string());
+                    // Limit history size
+                    if self.expression_history.len() > 50 {
+                        self.expression_history.remove(0);
+                    }
+                }
             }
             Err(e) => {
-                self.status_message = Some(format!("Parse error: {}", e));
+                let error_msg = e.to_string();
+                let hint = generate_hint(&error_msg, &converted);
+                let mut msg = hint.format();
+                // Show the converted form if LaTeX was used
+                if is_latex_input(source) && source != converted {
+                    msg = format!("Converted: {}\n{}", converted, msg);
+                }
+                self.status_message = Some(msg);
             }
         }
     }
@@ -248,19 +349,60 @@ impl MathGrapherApp {
     /// Remove an expression by index
     fn remove_expression(&mut self, index: usize) {
         if index < self.expressions.len() {
+            let expr = &self.expressions[index];
+
+            // Record action for undo
+            self.history.record(Action::RemoveExpression {
+                index,
+                source: expr.source.clone(),
+                color: expr.color,
+                expr_type: expr.expr_type,
+            });
+
             self.expressions.remove(index);
+            self.update_sliders_from_expressions();
         }
     }
 
     /// Recalculate all curves for current viewport
     fn recalculate_curves(&mut self) {
+        // Build parameter map from sliders
+        let params: HashMap<String, f64> = self.sliders
+            .iter()
+            .map(|s| (s.name.clone(), s.value))
+            .collect();
+
         for expr in &mut self.expressions {
             if expr.visible {
-                expr.update_cache(&self.canvas.viewport);
+                expr.update_cache_with_params(&self.canvas.viewport, &params);
             }
         }
         self.update_intersections();
         self.needs_recalc = false;
+    }
+
+    /// Update sliders based on parameters in all expressions
+    fn update_sliders_from_expressions(&mut self) {
+        // Collect all unique parameters
+        let mut all_params: Vec<String> = Vec::new();
+        for expr in &self.expressions {
+            for p in &expr.parameters {
+                if !all_params.contains(p) {
+                    all_params.push(p.clone());
+                }
+            }
+        }
+        all_params.sort();
+
+        // Remove sliders for parameters no longer in use
+        self.sliders.retain(|s| all_params.contains(&s.name));
+
+        // Add new sliders for new parameters
+        for param in &all_params {
+            if !self.sliders.iter().any(|s| &s.name == param) {
+                self.sliders.push(ParameterSlider::with_range(param.clone(), -5.0, 5.0));
+            }
+        }
     }
 
     /// Find and update intersection markers between all visible explicit curves
@@ -323,6 +465,134 @@ impl MathGrapherApp {
         self.fit_result = None;
         // Remove data point markers
         self.markers.retain(|m| m.marker_type != MarkerType::DataPoint);
+    }
+
+    /// Undo the last action
+    fn undo(&mut self) {
+        if let Some(action) = self.history.undo() {
+            match action {
+                Action::AddExpression { index, .. } => {
+                    // Undo add = remove the expression (without recording)
+                    if index < self.expressions.len() {
+                        self.expressions.remove(index);
+                        self.update_sliders_from_expressions();
+                        self.needs_recalc = true;
+                    }
+                }
+                Action::RemoveExpression { index, source, color, expr_type } => {
+                    // Undo remove = re-add the expression
+                    if let Ok(parsed) = parse_full_equation(&source) {
+                        let mut expr = match parsed {
+                            ParsedEquation::Explicit(ast) => {
+                                CompiledExpression::new(source.clone(), ast, expr_type, color)
+                            }
+                            ParsedEquation::Implicit(ast) => {
+                                CompiledExpression::new(source.clone(), ast, expr_type, color)
+                            }
+                            ParsedEquation::Polar(ast) => {
+                                CompiledExpression::new(source.clone(), ast, expr_type, color)
+                            }
+                            ParsedEquation::Parametric { x_ast, y_ast } => {
+                                let mut e = CompiledExpression::new_parametric(source.clone(), x_ast, y_ast, color);
+                                e.color = color;
+                                e
+                            }
+                            ParsedEquation::Inequality { expr: ast, op } => {
+                                CompiledExpression::new_inequality(source.clone(), ast, op, color)
+                            }
+                        };
+                        expr.update_cache(&self.canvas.viewport);
+                        let insert_index = index.min(self.expressions.len());
+                        self.expressions.insert(insert_index, expr);
+                        self.update_sliders_from_expressions();
+                        self.needs_recalc = true;
+                    }
+                }
+                Action::ToggleVisibility { index, was_visible } => {
+                    if index < self.expressions.len() {
+                        self.expressions[index].visible = was_visible;
+                        self.needs_recalc = true;
+                    }
+                }
+                Action::AddDataPoint { index, .. } => {
+                    if index < self.fit_data_points.len() {
+                        self.fit_data_points.remove(index);
+                        self.markers.retain(|m| m.marker_type != MarkerType::DataPoint);
+                        for p in &self.fit_data_points {
+                            self.markers.push(Marker::new(*p, MarkerType::DataPoint));
+                        }
+                        self.update_fit();
+                    }
+                }
+                Action::ClearDataPoints { points } => {
+                    for (x, y) in points {
+                        let point = Point::new(x, y);
+                        self.fit_data_points.push(point);
+                        self.markers.push(Marker::new(point, MarkerType::DataPoint));
+                    }
+                    self.update_fit();
+                }
+            }
+        }
+    }
+
+    /// Redo the last undone action
+    fn redo(&mut self) {
+        if let Some(action) = self.history.redo() {
+            match action {
+                Action::AddExpression { source, color, expr_type, .. } => {
+                    // Redo add = re-add the expression
+                    if let Ok(parsed) = parse_full_equation(&source) {
+                        let mut expr = match parsed {
+                            ParsedEquation::Explicit(ast) => {
+                                CompiledExpression::new(source.clone(), ast, expr_type, color)
+                            }
+                            ParsedEquation::Implicit(ast) => {
+                                CompiledExpression::new(source.clone(), ast, expr_type, color)
+                            }
+                            ParsedEquation::Polar(ast) => {
+                                CompiledExpression::new(source.clone(), ast, expr_type, color)
+                            }
+                            ParsedEquation::Parametric { x_ast, y_ast } => {
+                                let mut e = CompiledExpression::new_parametric(source.clone(), x_ast, y_ast, color);
+                                e.color = color;
+                                e
+                            }
+                            ParsedEquation::Inequality { expr: ast, op } => {
+                                CompiledExpression::new_inequality(source.clone(), ast, op, color)
+                            }
+                        };
+                        expr.update_cache(&self.canvas.viewport);
+                        self.expressions.push(expr);
+                        self.update_sliders_from_expressions();
+                        self.needs_recalc = true;
+                    }
+                }
+                Action::RemoveExpression { index, .. } => {
+                    // Redo remove = remove the expression again
+                    if index < self.expressions.len() {
+                        self.expressions.remove(index);
+                        self.update_sliders_from_expressions();
+                        self.needs_recalc = true;
+                    }
+                }
+                Action::ToggleVisibility { index, was_visible } => {
+                    if index < self.expressions.len() {
+                        self.expressions[index].visible = !was_visible;
+                        self.needs_recalc = true;
+                    }
+                }
+                Action::AddDataPoint { x, y, .. } => {
+                    let point = Point::new(x, y);
+                    self.fit_data_points.push(point);
+                    self.markers.push(Marker::new(point, MarkerType::DataPoint));
+                    self.update_fit();
+                }
+                Action::ClearDataPoints { .. } => {
+                    self.clear_fit_data();
+                }
+            }
+        }
     }
 
     /// Render the graph canvas
@@ -415,6 +685,11 @@ impl MathGrapherApp {
 
         // Render markers (intersections, etc.)
         self.marker_renderer.render_all(&ctx, &self.markers);
+
+        // Render query point (if any)
+        if let Some(ref query_marker) = self.query_point {
+            self.marker_renderer.render(&ctx, query_marker);
+        }
     }
 }
 
@@ -443,6 +718,19 @@ impl eframe::App for MathGrapherApp {
 
                 ui.separator();
 
+                // Undo/Redo buttons
+                let undo_enabled = self.history.can_undo();
+                let redo_enabled = self.history.can_redo();
+
+                if ui.add_enabled(undo_enabled, egui::Button::new("↶ Undo")).clicked() {
+                    self.undo();
+                }
+                if ui.add_enabled(redo_enabled, egui::Button::new("↷ Redo")).clicked() {
+                    self.redo();
+                }
+
+                ui.separator();
+
                 if ui.button("Settings").clicked() {
                     self.show_settings = !self.show_settings;
                 }
@@ -453,10 +741,48 @@ impl eframe::App for MathGrapherApp {
                     if !self.show_fitting_panel {
                         self.fitting_mode = false;
                     }
+                    // Exit query mode when entering fit mode
+                    if self.fitting_mode {
+                        self.query_mode = false;
+                    }
+                }
+
+                // Query mode button
+                let query_button = if self.query_mode {
+                    ui.add(egui::Button::new("📍 Query On").fill(egui::Color32::from_rgb(100, 180, 100)))
+                } else {
+                    ui.button("📍 Query")
+                };
+                if query_button.clicked() {
+                    self.query_mode = !self.query_mode;
+                    // Exit fitting mode when entering query mode
+                    if self.query_mode {
+                        self.fitting_mode = false;
+                    }
+                }
+
+                // Clear query point button
+                if self.query_point.is_some() {
+                    if ui.small_button("Clear Point").clicked() {
+                        self.query_point = None;
+                    }
+                }
+
+                // History button
+                let history_count = self.expression_history.len();
+                let history_button = if self.show_history {
+                    ui.add(egui::Button::new(format!("📜 History ({})", history_count)).fill(egui::Color32::from_rgb(100, 150, 200)))
+                } else {
+                    ui.button(format!("📜 History ({})", history_count))
+                };
+                if history_button.clicked() {
+                    self.show_history = !self.show_history;
                 }
 
                 if self.fitting_mode {
                     ui.label(egui::RichText::new("Click to add points").color(egui::Color32::YELLOW));
+                } else if self.query_mode {
+                    ui.label(egui::RichText::new("Click to query coordinates").color(egui::Color32::from_rgb(100, 200, 255)));
                 }
 
                 // Show mouse coordinates
@@ -476,10 +802,10 @@ impl eframe::App for MathGrapherApp {
                 ui.heading("Expressions");
                 ui.separator();
 
-                // Input field for new expression
+                // Input field for new expression with syntax highlighting
                 let mut new_expr = String::new();
-                let response = ui.horizontal(|ui| {
-                    let text_edit = ui.text_edit_singleline(&mut self.expression_panel.input_buffer);
+                let _response = ui.horizontal(|ui| {
+                    let text_edit = syntax_highlighted_text_edit(ui, &mut self.expression_panel.input_buffer);
                     if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         new_expr = self.expression_panel.input_buffer.clone();
                         self.expression_panel.input_buffer.clear();
@@ -613,7 +939,95 @@ impl eframe::App for MathGrapherApp {
                     self.add_expression("y = sin(x)");
                     self.add_expression("y = cos(x)");
                 }
+
+                // Parameter example
+                ui.separator();
+                ui.label("Parameters:");
+                if ui.small_button("a*sin(x)").clicked() {
+                    self.add_expression("y = a*sin(x)");
+                }
+                if ui.small_button("sin(b*x)").clicked() {
+                    self.add_expression("y = sin(b*x)");
+                }
             });
+
+        // Slider panel (shown when there are parameters)
+        if !self.sliders.is_empty() {
+            let mut slider_changed = false;
+            let mut any_animating = false;
+
+            egui::TopBottomPanel::bottom("sliders")
+                .resizable(true)
+                .min_height(50.0)
+                .max_height(200.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Parameters").strong());
+                        if ui.small_button("Reset All").clicked() {
+                            for slider in &mut self.sliders {
+                                slider.reset();
+                            }
+                            slider_changed = true;
+                        }
+                    });
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for slider in &mut self.sliders {
+                            ui.horizontal(|ui| {
+                                // Parameter name
+                                ui.label(format!("{} =", slider.name));
+
+                                // Editable value input
+                                let value_response = ui.add(
+                                    egui::DragValue::new(&mut slider.value)
+                                        .speed(0.01)
+                                        .range(slider.config.min..=slider.config.max)
+                                        .max_decimals(slider.config.precision)
+                                );
+
+                                if value_response.changed() {
+                                    slider_changed = true;
+                                }
+
+                                // Slider
+                                let slider_response = ui.add(
+                                    egui::Slider::new(&mut slider.value, slider.config.min..=slider.config.max)
+                                        .show_value(false)
+                                );
+
+                                if slider_response.changed() {
+                                    slider_changed = true;
+                                }
+
+                                // Animation toggle
+                                let anim_text = if slider.animating { "⏸" } else { "▶" };
+                                if ui.small_button(anim_text).clicked() {
+                                    slider.toggle_animation();
+                                }
+
+                                if slider.animating {
+                                    any_animating = true;
+                                }
+                            });
+                        }
+                    });
+                });
+
+            // Update animations
+            if any_animating {
+                let dt = ctx.input(|i| i.stable_dt) as f64;
+                for slider in &mut self.sliders {
+                    slider.update(dt);
+                }
+                slider_changed = true;
+                ctx.request_repaint();
+            }
+
+            if slider_changed {
+                self.needs_recalc = true;
+            }
+        }
 
         // Settings panel (optional)
         if self.show_settings {
@@ -667,6 +1081,27 @@ impl eframe::App for MathGrapherApp {
                     // Fitting mode toggle
                     if ui.button(if self.fitting_mode { "Stop Adding Points" } else { "Add Points (Click)" }).clicked() {
                         toggle_fitting_mode = true;
+                    }
+
+                    ui.separator();
+
+                    // Manual coordinate input
+                    ui.label("Or enter coordinates:");
+                    ui.horizontal(|ui| {
+                        ui.label("x:");
+                        ui.add(egui::TextEdit::singleline(&mut self.fit_input_x).desired_width(60.0));
+                        ui.label("y:");
+                        ui.add(egui::TextEdit::singleline(&mut self.fit_input_y).desired_width(60.0));
+                    });
+                    if ui.button("Add Point").clicked() {
+                        if let (Ok(x), Ok(y)) = (self.fit_input_x.trim().parse::<f64>(), self.fit_input_y.trim().parse::<f64>()) {
+                            let point = Point::new(x, y);
+                            self.fit_data_points.push(point);
+                            self.markers.push(Marker::new(point, MarkerType::DataPoint));
+                            self.update_fit();
+                            self.fit_input_x.clear();
+                            self.fit_input_y.clear();
+                        }
                     }
 
                     ui.separator();
@@ -753,6 +1188,48 @@ impl eframe::App for MathGrapherApp {
             }
         }
 
+        // Expression history panel
+        if self.show_history && !self.expression_history.is_empty() {
+            let mut expr_to_add: Option<String> = None;
+            let mut expr_to_remove: Option<usize> = None;
+
+            egui::SidePanel::right("history")
+                .default_width(280.0)
+                .show(ctx, |ui| {
+                    ui.heading("Expression History");
+                    ui.separator();
+
+                    ui.label("Click to add expression:");
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for (i, expr) in self.expression_history.iter().enumerate().rev() {
+                            ui.horizontal(|ui| {
+                                if ui.button(expr).clicked() {
+                                    expr_to_add = Some(expr.clone());
+                                }
+                                if ui.small_button("×").clicked() {
+                                    expr_to_remove = Some(i);
+                                }
+                            });
+                        }
+                    });
+
+                    ui.separator();
+
+                    if ui.button("Clear History").clicked() {
+                        self.expression_history.clear();
+                    }
+                });
+
+            // Apply changes after panel rendering
+            if let Some(expr) = expr_to_add {
+                self.add_expression(&expr);
+            }
+            if let Some(idx) = expr_to_remove {
+                self.expression_history.remove(idx);
+            }
+        }
+
         // Main canvas area
         egui::CentralPanel::default().show(ctx, |ui| {
             let available_size = ui.available_size();
@@ -784,6 +1261,15 @@ impl eframe::App for MathGrapherApp {
                     self.markers.push(Marker::new(world_point, MarkerType::DataPoint));
                     self.update_fit();
                 }
+            } else if self.query_mode && response.clicked() {
+                // Handle query mode clicks
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let local_pos = pos - rect.left_top();
+                    let world_point = transform.screen_to_world(local_pos.x, local_pos.y);
+
+                    // Set the query point marker
+                    self.query_point = Some(Marker::query_point(world_point));
+                }
             } else {
                 self.interaction.handle_input(&response, &mut self.canvas, &transform);
             }
@@ -798,6 +1284,46 @@ impl eframe::App for MathGrapherApp {
                 self.recalculate_curves();
             }
 
+            // Handle keyboard shortcuts
+            let (do_undo, do_redo) = ctx.input(|i| {
+                // Escape: exit query/fitting mode and clear query point
+                if i.key_pressed(egui::Key::Escape) {
+                    self.query_mode = false;
+                    self.fitting_mode = false;
+                    self.query_point = None;
+                }
+
+                // C: clear query point
+                if i.key_pressed(egui::Key::C) && !i.modifiers.ctrl && !i.modifiers.command {
+                    self.query_point = None;
+                }
+
+                // Q: toggle query mode
+                if i.key_pressed(egui::Key::Q) && !i.modifiers.ctrl && !i.modifiers.command {
+                    self.query_mode = !self.query_mode;
+                    if self.query_mode {
+                        self.fitting_mode = false;
+                    }
+                }
+
+                // Undo: Ctrl+Z or Cmd+Z
+                let undo = i.key_pressed(egui::Key::Z) && (i.modifiers.ctrl || i.modifiers.command) && !i.modifiers.shift;
+
+                // Redo: Ctrl+Shift+Z or Cmd+Shift+Z, or Ctrl+Y
+                let redo = (i.key_pressed(egui::Key::Z) && (i.modifiers.ctrl || i.modifiers.command) && i.modifiers.shift)
+                    || (i.key_pressed(egui::Key::Y) && (i.modifiers.ctrl || i.modifiers.command));
+
+                (undo, redo)
+            });
+
+            // Execute undo/redo outside the input closure
+            if do_undo {
+                self.undo();
+            }
+            if do_redo {
+                self.redo();
+            }
+
             // Render
             self.render_canvas(&painter, rect);
         });
@@ -806,5 +1332,101 @@ impl eframe::App for MathGrapherApp {
         if self.interaction.is_dragging {
             ctx.request_repaint();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse;
+
+    #[test]
+    fn test_expression_with_parameter_has_default_value() {
+        // Test that expressions with parameters use default value of 1.0
+        let ast = parse("a * x").unwrap();
+        let mut expr = CompiledExpression::new(
+            "a * x".to_string(),
+            ast,
+            ExpressionType::Explicit,
+            Color::new(1.0, 0.0, 0.0, 1.0),
+        );
+
+        // The expression should have parameter 'a'
+        assert!(expr.parameters.contains(&"a".to_string()));
+
+        // Create params with default value 1.0
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), 1.0);
+
+        // Update cache with params
+        let viewport = Rect::new(-10.0, -10.0, 10.0, 10.0);
+        expr.update_cache_with_params(&viewport, &params);
+
+        // Curve should be computed (not None)
+        assert!(expr.curve_data.is_some(), "Expression with parameter should have curve data when parameter has default value");
+
+        // The curve should have points
+        let curve = expr.curve_data.as_ref().unwrap();
+        assert!(!curve.points.is_empty(), "Curve should have points");
+    }
+
+    #[test]
+    fn test_expression_without_param_has_nan_points() {
+        // Test that expressions with undefined parameters have NaN points (marking discontinuities)
+        let ast = parse("a * x").unwrap();
+        let mut expr = CompiledExpression::new(
+            "a * x".to_string(),
+            ast,
+            ExpressionType::Explicit,
+            Color::new(1.0, 0.0, 0.0, 1.0),
+        );
+
+        // Verify that 'a' is detected as a parameter
+        assert!(expr.parameters.contains(&"a".to_string()), "Expression should have 'a' as a parameter");
+
+        // Update cache WITHOUT params - parameter 'a' is undefined
+        let viewport = Rect::new(-10.0, -10.0, 10.0, 10.0);
+        expr.update_cache(&viewport);
+
+        // When parameter is undefined, points are NaN (marking discontinuities)
+        if let Some(ref curve) = expr.curve_data {
+            // All points should have NaN y values
+            let all_nan = curve.points.iter().all(|p| p.y.is_nan());
+            assert!(all_nan, "Expression with undefined parameter should have NaN points");
+        }
+    }
+
+    #[test]
+    fn test_slider_default_value() {
+        // Test that sliders are created with default value 1.0
+        let slider = ParameterSlider::with_range("a", -5.0, 5.0);
+        assert_eq!(slider.value, 1.0, "Slider default value should be 1.0");
+    }
+
+    #[test]
+    fn test_multiple_parameters_with_defaults() {
+        // Test expression with multiple parameters
+        let ast = parse("a * x + b").unwrap();
+        let mut expr = CompiledExpression::new(
+            "a * x + b".to_string(),
+            ast,
+            ExpressionType::Explicit,
+            Color::new(1.0, 0.0, 0.0, 1.0),
+        );
+
+        // Both a and b should be parameters
+        assert!(expr.parameters.contains(&"a".to_string()));
+        assert!(expr.parameters.contains(&"b".to_string()));
+
+        // Create params with default values
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), 1.0);
+        params.insert("b".to_string(), 1.0);
+
+        let viewport = Rect::new(-10.0, -10.0, 10.0, 10.0);
+        expr.update_cache_with_params(&viewport, &params);
+
+        // Curve should be computed
+        assert!(expr.curve_data.is_some(), "Expression with multiple parameters should have curve data");
     }
 }

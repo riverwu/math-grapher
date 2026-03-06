@@ -225,6 +225,7 @@ fn factorial(n: u64) -> f64 {
 }
 
 /// Convenience function to evaluate an expression with a single variable
+#[allow(dead_code)]
 pub fn eval_at(ast: &AstNode, var: &str, value: f64) -> Result<f64, EvalError> {
     let evaluator = Evaluator::new();
     let mut ctx = EvalContext::new();
@@ -233,6 +234,7 @@ pub fn eval_at(ast: &AstNode, var: &str, value: f64) -> Result<f64, EvalError> {
 }
 
 /// Evaluate expression at multiple x values (batch evaluation)
+#[allow(dead_code)]
 pub fn eval_batch(ast: &AstNode, x_values: &[f64]) -> Vec<Result<f64, EvalError>> {
     let evaluator = Evaluator::new();
     let mut ctx = EvalContext::new();

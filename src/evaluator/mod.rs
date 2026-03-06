@@ -13,6 +13,7 @@ pub use adaptive::{AdaptiveSampler, SamplePoint};
 
 use crate::parser::{AstNode, ComparisonOp};
 use crate::common::{Point, Rect};
+use std::collections::HashMap;
 
 /// Result of evaluating a curve over a range
 #[derive(Debug, Clone)]
@@ -86,8 +87,23 @@ pub fn evaluate_explicit(
     bounds: &Rect,
     num_samples: usize,
 ) -> Result<CurveData, EvalError> {
+    evaluate_explicit_with_params(ast, bounds, num_samples, &HashMap::new())
+}
+
+/// Evaluate an explicit function y = f(x) with custom parameters
+pub fn evaluate_explicit_with_params(
+    ast: &AstNode,
+    bounds: &Rect,
+    num_samples: usize,
+    params: &HashMap<String, f64>,
+) -> Result<CurveData, EvalError> {
     let evaluator = Evaluator::new();
     let mut ctx = EvalContext::new();
+
+    // Set parameter values
+    for (name, value) in params {
+        ctx.set(name, *value);
+    }
 
     let mut curve = CurveData::with_capacity(num_samples);
     let step = bounds.width() / (num_samples - 1) as f64;

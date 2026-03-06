@@ -235,6 +235,15 @@ impl AstNode {
         vars
     }
 
+    /// Get parameter variables (excluding standard variables like x, y, t, theta, r)
+    pub fn get_parameters(&self) -> Vec<String> {
+        let standard_vars = ["x", "y", "t", "theta", "r"];
+        self.get_variables()
+            .into_iter()
+            .filter(|v| !standard_vars.contains(&v.as_str()))
+            .collect()
+    }
+
     fn collect_variables(&self, vars: &mut Vec<String>) {
         match self {
             AstNode::Number(_) | AstNode::Constant(_) => {}
@@ -313,5 +322,55 @@ mod tests {
         };
         let vars = ast.get_variables();
         assert_eq!(vars, vec!["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn test_get_parameters() {
+        // Expression: a * sin(b * x)
+        let ast = AstNode::BinaryOp {
+            op: BinaryOp::Mul,
+            left: Box::new(AstNode::Variable("a".to_string())),
+            right: Box::new(AstNode::Function {
+                func: Function::Sin,
+                args: vec![AstNode::BinaryOp {
+                    op: BinaryOp::Mul,
+                    left: Box::new(AstNode::Variable("b".to_string())),
+                    right: Box::new(AstNode::Variable("x".to_string())),
+                }],
+            }),
+        };
+
+        let params = ast.get_parameters();
+        // Should include a and b but not x
+        assert!(params.contains(&"a".to_string()));
+        assert!(params.contains(&"b".to_string()));
+        assert!(!params.contains(&"x".to_string()));
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn test_get_parameters_excludes_standard_vars() {
+        // Expression using x, y, t, theta, r
+        let ast = AstNode::BinaryOp {
+            op: BinaryOp::Add,
+            left: Box::new(AstNode::Variable("x".to_string())),
+            right: Box::new(AstNode::BinaryOp {
+                op: BinaryOp::Add,
+                left: Box::new(AstNode::Variable("y".to_string())),
+                right: Box::new(AstNode::BinaryOp {
+                    op: BinaryOp::Add,
+                    left: Box::new(AstNode::Variable("t".to_string())),
+                    right: Box::new(AstNode::BinaryOp {
+                        op: BinaryOp::Add,
+                        left: Box::new(AstNode::Variable("theta".to_string())),
+                        right: Box::new(AstNode::Variable("r".to_string())),
+                    }),
+                }),
+            }),
+        };
+
+        let params = ast.get_parameters();
+        // Should be empty - all are standard variables
+        assert!(params.is_empty());
     }
 }

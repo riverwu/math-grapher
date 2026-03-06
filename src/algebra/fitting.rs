@@ -71,7 +71,7 @@ impl FitResult {
             FitModel::Linear => {
                 format!("{:.4} + {:.4}*x", self.coefficients[0], self.coefficients[1])
             }
-            FitModel::Polynomial(degree) => {
+            FitModel::Polynomial(_degree) => {
                 let mut terms = Vec::new();
                 for (i, &c) in self.coefficients.iter().enumerate() {
                     if c.abs() < 1e-10 {

@@ -29,6 +29,11 @@ A Desmos-like mathematical graphing calculator built with Rust, featuring GPU-ac
 ### Interactive Features
 - Pan and zoom with mouse/keyboard
 - Real-time coordinate display
+- Click-to-query coordinates with markers
+- Parameter sliders with real-time animation
+- Expression syntax highlighting
+- Error hints and suggestions
+- Undo/redo support (Ctrl+Z / Ctrl+Shift+Z)
 - Multiple curves with automatic coloring
 - Visibility toggles for each expression
 - Quick-add example buttons
@@ -78,6 +83,11 @@ x^2 + y^2 < 4              # Disk interior
 | `+` / `=` | Zoom in |
 | `-` | Zoom out |
 | Arrow keys | Pan |
+| `Q` | Toggle coordinate query mode |
+| `C` | Clear query point |
+| `Escape` | Exit query/fit mode |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
 
 ### Curve Fitting
 1. Click "Curve Fit" in the toolbar

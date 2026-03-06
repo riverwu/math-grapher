@@ -158,6 +158,7 @@ fn remove_duplicate_points(points: &mut Vec<Point>, min_distance: f64) {
 }
 
 /// Find intersections between an explicit function and an implicit function
+#[allow(dead_code)]
 pub fn find_explicit_implicit_intersections(
     explicit: &AstNode,  // y = f(x)
     implicit: &AstNode,  // F(x, y) = 0
@@ -225,6 +226,7 @@ pub fn find_explicit_implicit_intersections(
 }
 
 /// Find all intersections in a set of curves
+#[allow(dead_code)]
 pub fn find_all_intersections(
     curves: &[(AstNode, bool)],  // (ast, is_implicit)
     x_range: (f64, f64),

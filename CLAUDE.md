@@ -64,6 +64,7 @@ src/
 │   ├── ast.rs           # AST 定义 (AstNode, ExpressionType, ParsedEquation)
 │   ├── lexer.rs         # 词法分析
 │   ├── validator.rs     # 语法验证
+│   ├── hints.rs         # 错误提示和建议
 │   └── mod.rs           # 解析器实现
 ├── evaluator/           # 计算引擎
 │   ├── cpu_eval.rs      # CPU 求值器
@@ -86,6 +87,8 @@ src/
     ├── expr_panel.rs    # 表达式面板
     ├── graph_view.rs    # 图形视图
     ├── slider.rs        # 参数滑块
+    ├── syntax.rs        # 语法高亮
+    ├── history.rs       # 撤销/重做
     └── settings.rs      # 设置面板
 ```
 
@@ -137,13 +140,13 @@ src/
 - [x] 自定义模型拟合（线性/多项式/指数/幂）
 - [x] 拟合结果显示和残差分析（UI 集成）
 
-### 阶段 4：交互增强 📋 计划中
-- [ ] 参数滑块（实时动画）
-- [ ] 点击查询坐标
-- [ ] 拖拽调整点/参数
-- [ ] 表达式语法高亮
-- [ ] 错误提示和建议
-- [ ] 撤销/重做
+### 阶段 4：交互增强 ✅ 已完成
+- [x] 参数滑块（实时动画）
+- [x] 点击查询坐标
+- [x] 表达式语法高亮
+- [x] 错误提示和建议
+- [x] 撤销/重做（Ctrl+Z / Ctrl+Shift+Z）
+- [ ] 拖拽调整点/参数（计划中）
 
 ### 阶段 5：性能优化和扩展 📋 计划中
 - [ ] GPU compute shader 求值
@@ -165,6 +168,27 @@ src/
 | 极坐标 | `r = sin(3*theta)`, `r = 1 + cos(theta)` | ✅ |
 | 不等式 | `y > x^2`, `y <= sin(x)`, `x^2 + y^2 < 4` | ✅ |
 
+## 新增功能 (v0.2)
+
+- **参数滑块**: 参数默认值为1，支持滑块和输入框两种方式调整
+- **曲线拟合增强**: 支持点击添加和手动输入坐标两种方式
+- **LaTeX输入**: 支持 `\sin{x}`, `\frac{1}{x}`, `\sqrt{x}`, `x^{2}` 等LaTeX语法
+- **表达式历史**: 记录已绘制的函数，可快速重新输入
+
+## 键盘快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `R` / `0` | 重置视图 |
+| `+` / `=` | 放大 |
+| `-` | 缩小 |
+| 方向键 | 平移 |
+| `Q` | 切换坐标查询模式 |
+| `C` | 清除查询点 |
+| `Escape` | 退出查询/拟合模式 |
+| `Ctrl+Z` | 撤销 |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | 重做 |
+
 ## 运行与测试
 
 ```bash
@@ -175,5 +199,5 @@ cargo run --release
 cargo test
 
 # 当前测试覆盖
-# 99 tests passed (parser, evaluator, algebra, render, ui)
+# 121 tests passed (parser, evaluator, algebra, render, ui)
 ```
