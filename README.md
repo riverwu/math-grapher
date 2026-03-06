@@ -1,8 +1,19 @@
 # Math Grapher
 
+[![Release](https://img.shields.io/github/v/release/riverwu/math-grapher)](https://github.com/riverwu/math-grapher/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A Desmos-like mathematical graphing calculator built with Rust, featuring GPU-accelerated rendering and real-time expression evaluation.
 
 [中文](#中文说明)
+
+## Download
+
+**[Download Latest Release (v0.1.0)](https://github.com/riverwu/math-grapher/releases/latest)**
+
+| Platform | Download |
+|----------|----------|
+| macOS (Apple Silicon) | [math-grapher-macos-arm64](https://github.com/riverwu/math-grapher/releases/download/v0.1.0/math-grapher-macos-arm64) |
 
 ## Features
 
@@ -30,10 +41,12 @@ A Desmos-like mathematical graphing calculator built with Rust, featuring GPU-ac
 - Pan and zoom with mouse/keyboard
 - Real-time coordinate display
 - Click-to-query coordinates with markers
-- Parameter sliders with real-time animation
+- Parameter sliders with real-time animation (default value: 1.0)
 - Expression syntax highlighting
 - Error hints and suggestions
 - Undo/redo support (Ctrl+Z / Ctrl+Shift+Z)
+- LaTeX input support (`\sin{x}`, `\frac{1}{x}`, `\sqrt{x}`, `x^{2}`)
+- Expression history for quick re-entry
 - Multiple curves with automatic coloring
 - Visibility toggles for each expression
 - Quick-add example buttons
@@ -142,8 +155,8 @@ src/
 - [x] **Phase 1**: Basic framework (expressions, explicit/implicit curves, pan/zoom)
 - [x] **Phase 2**: Advanced plotting (parametric, polar, inequalities)
 - [x] **Phase 3**: Algebra tools (intersections, curve fitting)
-- [ ] **Phase 4**: Interaction (sliders, point dragging, syntax highlighting)
-- [ ] **Phase 5**: Performance & export (GPU compute, PNG/SVG export)
+- [x] **Phase 4**: Interaction (sliders, syntax highlighting, undo/redo, LaTeX input)
+- [ ] **Phase 5**: Performance & export (GPU compute, PNG/SVG export, point dragging)
 
 ## License
 
@@ -154,6 +167,14 @@ MIT License
 # 中文说明
 
 一个类似 Desmos 的数学图形计算器，使用 Rust 构建，支持 GPU 加速渲染和实时表达式求值。
+
+## 下载
+
+**[下载最新版本 (v0.1.0)](https://github.com/riverwu/math-grapher/releases/latest)**
+
+| 平台 | 下载 |
+|------|------|
+| macOS (Apple Silicon) | [math-grapher-macos-arm64](https://github.com/riverwu/math-grapher/releases/download/v0.1.0/math-grapher-macos-arm64) |
 
 ## 功能特性
 
