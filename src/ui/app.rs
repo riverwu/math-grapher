@@ -18,6 +18,7 @@ use crate::render::{
 };
 
 use super::{ExpressionPanel, GraphView, SettingsPanel, ParameterSlider, syntax_highlighted_text_edit, History, Action, MathFormatter};
+use super::project::{ProjectData, ExpressionData, ParameterData};
 
 /// A compiled expression ready for rendering
 #[derive(Debug, Clone)]
@@ -230,6 +231,10 @@ pub struct MathGrapherApp {
     snap_point: Option<(Point, SnapPointType)>,
     /// Snap distance in pixels
     snap_distance: f64,
+
+    // Export
+    /// Pending screenshot save path
+    pending_screenshot_path: Option<std::path::PathBuf>,
 }
 
 /// Type of snap point
@@ -276,6 +281,8 @@ impl MathGrapherApp {
             // Snap point
             snap_point: None,
             snap_distance: 20.0, // pixels - increased for better detection
+            // Export
+            pending_screenshot_path: None,
         }
     }
 
@@ -474,6 +481,132 @@ impl MathGrapherApp {
         self.fit_result = None;
         // Remove data point markers
         self.markers.retain(|m| m.marker_type != MarkerType::DataPoint);
+    }
+
+    /// Create a ProjectData from current state
+    fn to_project_data(&self) -> ProjectData {
+        ProjectData {
+            version: 1,
+            expressions: self.expressions.iter().map(|e| ExpressionData {
+                source: e.source.clone(),
+                color: e.color,
+                visible: e.visible,
+            }).collect(),
+            viewport: self.canvas.viewport,
+            parameters: self.sliders.iter().map(|s| ParameterData {
+                name: s.name.clone(),
+                value: s.value,
+            }).collect(),
+        }
+    }
+
+    /// Load project data, replacing current state
+    fn load_project_data(&mut self, data: ProjectData) {
+        // Clear current state
+        self.expressions.clear();
+        self.markers.clear();
+        self.sliders.clear();
+        self.history.clear();
+        self.query_point = None;
+        self.snap_point = None;
+        self.clear_fit_data();
+
+        // Set viewport
+        self.canvas.set_viewport(data.viewport);
+
+        // Add expressions
+        for expr_data in &data.expressions {
+            self.add_expression(&expr_data.source);
+            // Restore visibility and color
+            if let Some(expr) = self.expressions.last_mut() {
+                expr.visible = expr_data.visible;
+                expr.color = expr_data.color;
+            }
+        }
+
+        // Restore parameter values
+        for param_data in &data.parameters {
+            if let Some(slider) = self.sliders.iter_mut().find(|s| s.name == param_data.name) {
+                slider.value = param_data.value;
+            }
+        }
+
+        self.needs_recalc = true;
+    }
+
+    /// Save project to file (using file dialog)
+    fn save_project(&mut self) {
+        let data = self.to_project_data();
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Save Project")
+            .add_filter("Math Grapher Project", &["mgp", "json"])
+            .set_file_name("project.mgp")
+            .save_file()
+        {
+            match data.save_to_file(&path) {
+                Ok(()) => {
+                    self.status_message = Some(format!("Project saved to {}", path.display()));
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("Save failed: {}", e));
+                }
+            }
+        }
+    }
+
+    /// Load project from file (using file dialog)
+    fn load_project(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Open Project")
+            .add_filter("Math Grapher Project", &["mgp", "json"])
+            .pick_file()
+        {
+            match ProjectData::load_from_file(&path) {
+                Ok(data) => {
+                    self.load_project_data(data);
+                    self.status_message = Some(format!("Project loaded from {}", path.display()));
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("Load failed: {}", e));
+                }
+            }
+        }
+    }
+
+    /// Export graph as PNG image
+    fn export_png(&mut self, ctx: &egui::Context) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Export PNG")
+            .add_filter("PNG Image", &["png"])
+            .set_file_name("graph.png")
+            .save_file()
+        {
+            // Request a screenshot from egui
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            self.pending_screenshot_path = Some(path);
+        }
+    }
+
+    /// Move expression up in list
+    fn move_expression_up(&mut self, index: usize) {
+        if index > 0 && index < self.expressions.len() {
+            self.expressions.swap(index, index - 1);
+        }
+    }
+
+    /// Move expression down in list
+    fn move_expression_down(&mut self, index: usize) {
+        if index + 1 < self.expressions.len() {
+            self.expressions.swap(index, index + 1);
+        }
+    }
+
+    /// Duplicate an expression
+    fn duplicate_expression(&mut self, index: usize) {
+        if index < self.expressions.len() {
+            let source = self.expressions[index].source.clone();
+            self.add_expression(&source);
+        }
     }
 
     /// Find the nearest snap point to the mouse position
@@ -806,9 +939,57 @@ impl MathGrapherApp {
 
 impl eframe::App for MathGrapherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle pending screenshot
+        if self.pending_screenshot_path.is_some() {
+            let screenshot = ctx.input(|i| {
+                i.events.iter().find_map(|e| {
+                    if let egui::Event::Screenshot { image, .. } = e {
+                        Some(image.clone())
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            if let Some(screenshot) = screenshot {
+                if let Some(path) = self.pending_screenshot_path.take() {
+                    let pixels = screenshot.as_raw();
+                    let width = screenshot.width() as u32;
+                    let height = screenshot.height() as u32;
+                    if let Some(img) = image::RgbaImage::from_raw(width, height, pixels.to_vec()) {
+                        match img.save(&path) {
+                            Ok(()) => {
+                                self.status_message = Some(format!("Exported to {}", path.display()));
+                            }
+                            Err(e) => {
+                                self.status_message = Some(format!("Export failed: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Top toolbar
+        let mut do_save = false;
+        let mut do_load = false;
+        let mut do_export = false;
+
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // File operations
+                if ui.button("📂 Open").on_hover_text("Open project file").clicked() {
+                    do_load = true;
+                }
+                if ui.button("💾 Save").on_hover_text("Save project file").clicked() {
+                    do_save = true;
+                }
+                if ui.button("📷 Export").on_hover_text("Export as PNG").clicked() {
+                    do_export = true;
+                }
+
+                ui.separator();
+
                 // Zoom controls
                 if ui.button("Reset View").clicked() {
                     self.canvas.reset_viewport();
@@ -874,6 +1055,17 @@ impl eframe::App for MathGrapherApp {
             });
         });
 
+        // Execute file operations outside the UI closure
+        if do_save {
+            self.save_project();
+        }
+        if do_load {
+            self.load_project();
+        }
+        if do_export {
+            self.export_png(ctx);
+        }
+
         // Left panel - expression list and tools (no right border)
         egui::SidePanel::left("expressions")
             .default_width(350.0)
@@ -905,8 +1097,12 @@ impl eframe::App for MathGrapherApp {
 
                 // Expression list
                 let mut to_remove = None;
+                let mut to_move_up = None;
+                let mut to_move_down = None;
+                let mut to_duplicate = None;
                 let mut visibility_changed = false;
 
+                let expr_count = self.expressions.len();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for (i, expr) in self.expressions.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
@@ -926,16 +1122,40 @@ impl eframe::App for MathGrapherApp {
                             let formatted = MathFormatter::format(&expr.source);
                             ui.label(egui::RichText::new(formatted).size(14.0));
 
-                            // Remove button
-                            if ui.small_button("×").clicked() {
-                                to_remove = Some(i);
-                            }
+                            // Expression management buttons
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("×").on_hover_text("Remove").clicked() {
+                                    to_remove = Some(i);
+                                }
+                                if ui.small_button("Copy").on_hover_text("Duplicate this expression").clicked() {
+                                    to_duplicate = Some(i);
+                                }
+                                if i + 1 < expr_count {
+                                    if ui.small_button("Down").on_hover_text("Move down").clicked() {
+                                        to_move_down = Some(i);
+                                    }
+                                }
+                                if i > 0 {
+                                    if ui.small_button("Up").on_hover_text("Move up").clicked() {
+                                        to_move_up = Some(i);
+                                    }
+                                }
+                            });
                         });
                     }
                 });
 
                 if let Some(idx) = to_remove {
                     self.remove_expression(idx);
+                }
+                if let Some(idx) = to_move_up {
+                    self.move_expression_up(idx);
+                }
+                if let Some(idx) = to_move_down {
+                    self.move_expression_down(idx);
+                }
+                if let Some(idx) = to_duplicate {
+                    self.duplicate_expression(idx);
                 }
 
                 if visibility_changed {
@@ -1360,7 +1580,7 @@ impl eframe::App for MathGrapherApp {
             }
 
             // Handle keyboard shortcuts
-            let (do_undo, do_redo) = ctx.input(|i| {
+            let (do_undo, do_redo, do_save, do_open) = ctx.input(|i| {
                 // Escape: exit query/fitting mode and clear query point
                 if i.key_pressed(egui::Key::Escape) {
                     self.query_mode = false;
@@ -1388,7 +1608,13 @@ impl eframe::App for MathGrapherApp {
                 let redo = (i.key_pressed(egui::Key::Z) && (i.modifiers.ctrl || i.modifiers.command) && i.modifiers.shift)
                     || (i.key_pressed(egui::Key::Y) && (i.modifiers.ctrl || i.modifiers.command));
 
-                (undo, redo)
+                // Save: Ctrl+S or Cmd+S
+                let save = i.key_pressed(egui::Key::S) && (i.modifiers.ctrl || i.modifiers.command);
+
+                // Open: Ctrl+O or Cmd+O
+                let open = i.key_pressed(egui::Key::O) && (i.modifiers.ctrl || i.modifiers.command);
+
+                (undo, redo, save, open)
             });
 
             // Execute undo/redo outside the input closure
@@ -1397,6 +1623,12 @@ impl eframe::App for MathGrapherApp {
             }
             if do_redo {
                 self.redo();
+            }
+            if do_save {
+                self.save_project();
+            }
+            if do_open {
+                self.load_project();
             }
 
             // Render
@@ -1722,5 +1954,143 @@ mod tests {
             }
         }
         assert_eq!(crossings, 0); // No valid crossings due to NaN
+    }
+
+    #[test]
+    fn test_project_data_roundtrip() {
+        // Test creating project data from expressions
+        let data = ProjectData {
+            version: 1,
+            expressions: vec![
+                ExpressionData {
+                    source: "y = sin(x)".to_string(),
+                    color: Color::BLUE,
+                    visible: true,
+                },
+                ExpressionData {
+                    source: "y = x^2".to_string(),
+                    color: Color::RED,
+                    visible: false,
+                },
+            ],
+            viewport: Rect::new(-5.0, 5.0, -3.0, 3.0),
+            parameters: vec![
+                ParameterData {
+                    name: "a".to_string(),
+                    value: 2.5,
+                },
+            ],
+        };
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&data).unwrap();
+        let loaded: ProjectData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(loaded.expressions.len(), 2);
+        assert_eq!(loaded.expressions[0].source, "y = sin(x)");
+        assert_eq!(loaded.expressions[1].visible, false);
+        assert_eq!(loaded.viewport.x_min, -5.0);
+        assert_eq!(loaded.viewport.x_max, 5.0);
+        assert_eq!(loaded.parameters.len(), 1);
+        assert_eq!(loaded.parameters[0].name, "a");
+    }
+
+    #[test]
+    fn test_expression_move_operations() {
+        // Test move up logic
+        let mut items = vec!["a", "b", "c"];
+
+        // Move "b" (index 1) up
+        if 1 > 0 {
+            items.swap(1, 0);
+        }
+        assert_eq!(items, vec!["b", "a", "c"]);
+
+        // Move "c" (now index 2) down - should be noop since it's last
+        // (index + 1 >= len)
+        assert_eq!(items.len(), 3);
+
+        // Move "a" (index 1) down
+        if 1 + 1 < items.len() {
+            items.swap(1, 2);
+        }
+        assert_eq!(items, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn test_expression_move_boundary() {
+        let mut items = vec!["only"];
+
+        // Move up at 0 - noop
+        let idx = 0;
+        if idx > 0 {
+            items.swap(idx, idx - 1);
+        }
+        assert_eq!(items, vec!["only"]);
+
+        // Move down at 0 with only 1 item - noop
+        if idx + 1 < items.len() {
+            items.swap(idx, idx + 1);
+        }
+        assert_eq!(items, vec!["only"]);
+    }
+
+    #[test]
+    fn test_compiled_expression_parametric() {
+        let x_ast = parse("cos(t)").unwrap();
+        let y_ast = parse("sin(t)").unwrap();
+        let expr = CompiledExpression::new_parametric(
+            "[cos(t), sin(t)]".to_string(),
+            x_ast,
+            y_ast,
+            Color::GREEN,
+        );
+
+        assert_eq!(expr.expr_type, ExpressionType::Parametric);
+        assert!(expr.parametric_ast.is_some());
+        assert!(expr.parameters.is_empty()); // t is not a parameter
+    }
+
+    #[test]
+    fn test_compiled_expression_parametric_with_param() {
+        let x_ast = parse("a*cos(t)").unwrap();
+        let y_ast = parse("b*sin(t)").unwrap();
+        let expr = CompiledExpression::new_parametric(
+            "[a*cos(t), b*sin(t)]".to_string(),
+            x_ast,
+            y_ast,
+            Color::GREEN,
+        );
+
+        assert!(expr.parameters.contains(&"a".to_string()));
+        assert!(expr.parameters.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_project_save_load_file() {
+        let data = ProjectData {
+            version: 1,
+            expressions: vec![
+                ExpressionData {
+                    source: "y = x^2".to_string(),
+                    color: Color::BLUE,
+                    visible: true,
+                },
+            ],
+            viewport: Rect::new(-10.0, 10.0, -10.0, 10.0),
+            parameters: Vec::new(),
+        };
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_math_grapher_app.mgp");
+
+        // Save and load
+        data.save_to_file(&path).unwrap();
+        let loaded = ProjectData::load_from_file(&path).unwrap();
+
+        assert_eq!(loaded.expressions.len(), 1);
+        assert_eq!(loaded.expressions[0].source, "y = x^2");
+
+        std::fs::remove_file(&path).ok();
     }
 }

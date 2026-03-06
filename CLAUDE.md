@@ -29,6 +29,8 @@ nalgebra = "0.33"    # 线性代数
 serde = "1.0"        # 序列化
 thiserror = "1.0"    # 错误处理
 env_logger = "0.11"  # 日志
+rfd = "0.15"         # 文件对话框
+image = "0.25"       # PNG 导出
 ```
 
 ### 系统架构
@@ -86,6 +88,8 @@ src/
     ├── app.rs           # 主应用状态
     ├── expr_panel.rs    # 表达式面板
     ├── graph_view.rs    # 图形视图
+    ├── math_display.rs  # 数学公式格式化
+    ├── project.rs       # 项目保存/加载
     ├── slider.rs        # 参数滑块
     ├── syntax.rs        # 语法高亮
     ├── history.rs       # 撤销/重做
@@ -146,15 +150,17 @@ src/
 - [x] 表达式语法高亮
 - [x] 错误提示和建议
 - [x] 撤销/重做（Ctrl+Z / Ctrl+Shift+Z）
-- [ ] 拖拽调整点/参数（计划中）
+- [x] 拖拽调整点/参数 → 移至阶段5
 
-### 阶段 5：性能优化和扩展 📋 计划中
+### 阶段 5：性能优化和扩展 🔄 进行中
 - [ ] GPU compute shader 求值
 - [ ] 自适应采样优化
-- [ ] 图形导出（PNG/SVG）
-- [ ] 项目保存/加载
-- [ ] 表达式列表管理
-- [ ] 键盘快捷键
+- [x] 图形导出（PNG）
+- [x] 项目保存/加载（JSON/.mgp 格式）
+- [x] 表达式列表管理（上移/下移/复制）
+- [x] 键盘快捷键（Ctrl+S 保存, Ctrl+O 打开）
+- [ ] SVG 导出
+- [ ] 拖拽调整点/参数
 
 ---
 
@@ -188,6 +194,8 @@ src/
 | `Escape` | 退出查询/拟合模式 |
 | `Ctrl+Z` | 撤销 |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | 重做 |
+| `Ctrl+S` | 保存项目 |
+| `Ctrl+O` | 打开项目 |
 
 ## 运行与测试
 
@@ -199,5 +207,5 @@ cargo run --release
 cargo test
 
 # 当前测试覆盖
-# 121 tests passed (parser, evaluator, algebra, render, ui)
+# 176 tests passed (parser, evaluator, algebra, render, ui, project)
 ```

@@ -9,11 +9,11 @@ A Desmos-like mathematical graphing calculator built with Rust, featuring GPU-ac
 
 ## Download
 
-**[Download Latest Release (v0.2.0)](https://github.com/riverwu/math-grapher/releases/latest)**
+**[Download Latest Release (v0.3.0)](https://github.com/riverwu/math-grapher/releases/latest)**
 
 | Platform | Download |
 |----------|----------|
-| macOS | [math-grapher-v0.2.0-macos.zip](https://github.com/riverwu/math-grapher/releases/download/v0.2.0/math-grapher-v0.2.0-macos.zip) |
+| macOS | [math-grapher-v0.3.0-macos.zip](https://github.com/riverwu/math-grapher/releases/download/v0.3.0/math-grapher-v0.3.0-macos.zip) |
 
 ### macOS: First Run Instructions
 
@@ -22,7 +22,7 @@ Since the binary is not signed with an Apple Developer certificate, macOS Gateke
 **Method 1: Remove quarantine attribute (Recommended)**
 ```bash
 # Unzip and make executable
-unzip math-grapher-v0.2.0-macos.zip
+unzip math-grapher-v0.3.0-macos.zip
 chmod +x math-grapher
 # Remove quarantine attribute
 xattr -cr math-grapher
@@ -50,14 +50,14 @@ xattr -cr math-grapher
 - Power/Root: `sqrt`, `cbrt`, `pow`, `^`
 - Utilities: `abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `factorial`
 
-### Math Formula Display (v0.2.0)
+### Math Formula Display (v0.3.0)
 Expressions are displayed with beautiful Unicode symbols:
 - Exponents: `x^2` → `x²`, `x^(-1)` → `x⁻¹`
 - Greek letters: `theta` → `θ`, `pi` → `π`, `alpha` → `α`
 - Operators: `*` → `·`, `<=` → `≤`, `>=` → `≥`
 - Functions: `sqrt` → `√`
 
-### Critical Point Snapping (v0.2.0)
+### Critical Point Snapping (v0.3.0)
 Mouse automatically snaps to nearby critical points:
 - **Intersections** (yellow): Points where curves cross
 - **Zeros** (green): Points where curves cross y=0
@@ -85,6 +85,19 @@ Mouse automatically snaps to nearby critical points:
 - Visibility toggles for each expression
 - Quick-add example buttons
 - Collapsible sidebar sections for Settings, Curve Fitting, and History (v0.2.0)
+
+### Project Save/Load (v0.3.0)
+- **Save project**: Save all expressions, viewport, and parameters to `.mgp` file
+- **Load project**: Restore a previously saved project
+- Keyboard shortcuts: `Ctrl+S` (save), `Ctrl+O` (open)
+
+### PNG Export (v0.3.0)
+- Export the current graph view as a PNG image
+
+### Expression Management (v0.3.0)
+- **Reorder**: Move expressions up/down in the list
+- **Duplicate**: Copy an expression with one click
+- **Remove**: Delete expressions from the list
 
 ## Installation
 
@@ -136,6 +149,8 @@ x^2 + y^2 < 4              # Disk interior
 | `Escape` | Exit query/fit mode |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
+| `Ctrl+S` | Save project |
+| `Ctrl+O` | Open project |
 
 ### Curve Fitting
 1. Expand "Curve Fitting" in the left sidebar
@@ -154,6 +169,8 @@ x^2 + y^2 < 4              # Disk interior
 | Graphics | wgpu (Vulkan/Metal/DX12) |
 | Linear Algebra | nalgebra |
 | Serialization | serde |
+| File Dialog | rfd |
+| Image Export | image |
 
 ## Project Structure
 
@@ -183,6 +200,7 @@ src/
 └── ui/                  # User interface
     ├── app.rs           # Main application
     ├── math_display.rs  # Math formula formatting
+    ├── project.rs       # Project save/load
     └── ...              # UI components
 ```
 
@@ -193,9 +211,16 @@ src/
 - [x] **Phase 3**: Algebra tools (intersections, curve fitting)
 - [x] **Phase 4**: Interaction (sliders, syntax highlighting, undo/redo, LaTeX input)
 - [x] **Phase 4.5**: UI optimization (sidebar integration, math display, snap points)
-- [ ] **Phase 5**: Performance & export (GPU compute, PNG/SVG export, point dragging)
+- [x] **Phase 5**: Project management & export (save/load, PNG export, expression management)
+- [ ] **Phase 6**: Performance & advanced features (GPU compute, SVG export, point dragging)
 
 ## Changelog
+
+### v0.3.0 (2026-03-06)
+- **Project Save/Load**: Save and restore graph projects (`.mgp`/`.json` format)
+- **PNG Export**: Export graph as PNG image
+- **Expression Management**: Reorder (Up/Down), duplicate, remove expressions
+- **Keyboard Shortcuts**: `Ctrl+S` save, `Ctrl+O` open
 
 ### v0.2.0 (2026-03-06)
 - **UI Optimization**: Consolidated sidebar with collapsible sections
@@ -218,11 +243,11 @@ MIT License
 
 ## 下载
 
-**[下载最新版本 (v0.2.0)](https://github.com/riverwu/math-grapher/releases/latest)**
+**[下载最新版本 (v0.3.0)](https://github.com/riverwu/math-grapher/releases/latest)**
 
 | 平台 | 下载 |
 |------|------|
-| macOS | [math-grapher-v0.2.0-macos.zip](https://github.com/riverwu/math-grapher/releases/download/v0.2.0/math-grapher-v0.2.0-macos.zip) |
+| macOS | [math-grapher-v0.3.0-macos.zip](https://github.com/riverwu/math-grapher/releases/download/v0.3.0/math-grapher-v0.3.0-macos.zip) |
 
 ### macOS 首次运行说明
 
@@ -231,7 +256,7 @@ MIT License
 **方法 1：移除隔离属性（推荐）**
 ```bash
 # 解压并添加执行权限
-unzip math-grapher-v0.2.0-macos.zip
+unzip math-grapher-v0.3.0-macos.zip
 chmod +x math-grapher
 # 移除隔离属性
 xattr -cr math-grapher
@@ -253,14 +278,14 @@ xattr -cr math-grapher
 - **极坐标**: `r = sin(3*theta)`
 - **不等式**: `y > x^2`, `x^2 + y^2 < 4`
 
-### 数学公式显示 (v0.2.0)
+### 数学公式显示 (v0.3.0)
 表达式使用 Unicode 符号美化显示：
 - 指数: `x^2` → `x²`
 - 希腊字母: `theta` → `θ`, `pi` → `π`
 - 运算符: `*` → `·`, `<=` → `≤`
 - 函数: `sqrt` → `√`
 
-### 关键点吸附 (v0.2.0)
+### 关键点吸附 (v0.3.0)
 鼠标自动吸附到附近的关键点：
 - **交点**（黄色）：曲线交叉点
 - **零点**（绿色）：曲线与 y=0 的交点
@@ -273,6 +298,12 @@ xattr -cr math-grapher
 ### 界面优化 (v0.2.0)
 - 左侧边栏整合设置、拟合、历史为折叠区域
 - 更简洁的界面布局
+
+### 项目管理与导出 (v0.3.0)
+- **项目保存/加载**: 保存和恢复图形项目（`.mgp`/`.json` 格式）
+- **PNG 导出**: 将图形导出为 PNG 图片
+- **表达式管理**: 上移/下移、复制、删除表达式
+- **快捷键**: `Ctrl+S` 保存, `Ctrl+O` 打开
 
 ## 快速开始
 
@@ -305,6 +336,8 @@ y > x^2                    # 抛物线上方区域
 | `Escape` | 退出查询/拟合模式 |
 | `Ctrl+Z` | 撤销 |
 | `Ctrl+Shift+Z` | 重做 |
+| `Ctrl+S` | 保存项目 |
+| `Ctrl+O` | 打开项目 |
 
 ## 技术栈
 
@@ -314,6 +347,12 @@ y > x^2                    # 抛物线上方区域
 - **线性代数**: nalgebra
 
 ## 更新日志
+
+### v0.3.0 (2026-03-06)
+- **项目保存/加载**: 保存和恢复图形项目（`.mgp`/`.json` 格式）
+- **PNG 导出**: 将图形导出为 PNG 图片
+- **表达式管理**: 上移/下移、复制、删除表达式
+- **快捷键**: `Ctrl+S` 保存, `Ctrl+O` 打开
 
 ### v0.2.0 (2026-03-06)
 - **界面优化**: 左侧边栏整合折叠区域
